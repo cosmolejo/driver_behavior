@@ -4,8 +4,8 @@
 ### JupyterNotebooks ###
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/
-.directory/
-.directory/*
+.directory
+
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
 
@@ -26,7 +26,7 @@ ipython_config.py
 .idea/**/usage.statistics.xml
 .idea/**/dictionaries
 .idea/**/shelf
-
+.idea/*
 # AWS User-specific
 .idea/**/aws.xml
 
