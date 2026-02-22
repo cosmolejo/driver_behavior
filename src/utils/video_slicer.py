@@ -14,14 +14,14 @@ def slice_frame(video_folder: str | Path, sample_dict: dict[str, Any]) -> list[A
 
         # Parse and validate inputs early to avoid confusing downstream errors.
         try:
-            start_frame = int(sample_dict["frame_start"])
-            end_frame = int(sample_dict["frame_end"])
+            start_frame = int(sample_dict["frame_start"][0]) if type(sample_dict["frame_start"]) == list else int(sample_dict["frame_start"])
+            end_frame = int(sample_dict["frame_end"][0]) if type(sample_dict["frame_end"]) == list else int(sample_dict["frame_end"])
         except KeyError as e:
             raise KeyError(f"Missing required key in sample_dict: {e.args[0]!r}") from e
         except (TypeError, ValueError) as e:
             raise ValueError("frame_start/frame_end must be int-convertible") from e
 
-        file_id = str(sample_dict.get("file_id", "")).strip()
+        file_id = str(sample_dict["file_id"][0]).strip() if type(sample_dict.get("file_id")) == list else str(sample_dict["file_id"]).strip()
         if not file_id:
             raise ValueError("sample_dict['file_id'] must be a non-empty value")
 
@@ -30,6 +30,7 @@ def slice_frame(video_folder: str | Path, sample_dict: dict[str, Any]) -> list[A
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             logging.warning("Error opening video: %s", video_path)
+            print('no se pudo abrir el video')
             return []
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
