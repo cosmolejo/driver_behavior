@@ -5,13 +5,13 @@ from typing import Any, Callable, Optional
 import torch
 from torch import nn, Tensor
 
-from ..ops.misc import Conv2dNormActivation, SqueezeExcitation as SElayer
-from ..transforms._presets import ImageClassification
-from ..utils import _log_api_usage_once
-from ._api import register_model, Weights, WeightsEnum
-from ._meta import _IMAGENET_CATEGORIES
-from ._utils import _make_divisible, _ovewrite_named_param, handle_legacy_interface
-
+from torchvision.ops.misc import Conv2dNormActivation
+from torchvision.ops.misc import SqueezeExcitation as SElayer
+from torchvision.transforms._presets import ImageClassification
+from torchvision.utils import _log_api_usage_once
+from torchvision.models._api import Weights, WeightsEnum, register_model
+from torchvision.models._meta import _IMAGENET_CATEGORIES
+from torchvision.models._utils import _make_divisible, _ovewrite_named_param, handle_legacy_interface
 
 __all__ = [
     "MobileNetV3",
@@ -294,7 +294,7 @@ _COMMON_META = {
 }
 
 
-[docs]class MobileNet_V3_Large_Weights(WeightsEnum):
+class MobileNet_V3_Large_Weights(WeightsEnum):
     IMAGENET1K_V1 = Weights(
         url="https://download.pytorch.org/models/mobilenet_v3_large-8738ca79.pth",
         transforms=partial(ImageClassification, crop_size=224),
@@ -338,7 +338,7 @@ _COMMON_META = {
     DEFAULT = IMAGENET1K_V2
 
 
-[docs]class MobileNet_V3_Small_Weights(WeightsEnum):
+class MobileNet_V3_Small_Weights(WeightsEnum):
     IMAGENET1K_V1 = Weights(
         url="https://download.pytorch.org/models/mobilenet_v3_small-047dcff4.pth",
         transforms=partial(ImageClassification, crop_size=224),
@@ -362,7 +362,7 @@ _COMMON_META = {
     DEFAULT = IMAGENET1K_V1
 
 
-[docs]@register_model()
+@register_model()
 @handle_legacy_interface(weights=("pretrained", MobileNet_V3_Large_Weights.IMAGENET1K_V1))
 def mobilenet_v3_large(
     *, weights: Optional[MobileNet_V3_Large_Weights] = None, progress: bool = True, **kwargs: Any
@@ -393,7 +393,7 @@ def mobilenet_v3_large(
     return _mobilenet_v3(inverted_residual_setting, last_channel, weights, progress, **kwargs)
 
 
-[docs]@register_model()
+@register_model()
 @handle_legacy_interface(weights=("pretrained", MobileNet_V3_Small_Weights.IMAGENET1K_V1))
 def mobilenet_v3_small(
     *, weights: Optional[MobileNet_V3_Small_Weights] = None, progress: bool = True, **kwargs: Any
