@@ -25,11 +25,14 @@ from utils.misc import print_cuda_statistics
 
 cudnn.benchmark = True
 
+import logging
 
-class MnistAgent(BaseAgent):
 
-    def __init__(self, config):
-        super().__init__(config)
+class SafeDrivingTrainer(BaseAgent):
+
+    def __init__(self, config, data_module=None,):
+        self.config = config
+        self.logger = logging.getLogger(self.config.trainer)
 
         # define models
         self.model = Mnist()

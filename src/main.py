@@ -8,28 +8,26 @@ Main
 -Run the agent
 """
 
-import argparse
-from utils.config import *
+
+
 
 from trainers import *
 
+from omegaconf import DictConfig, OmegaConf
+import hydra
+import os
 
-def main():
-    # parse the path of the json config file
-    arg_parser = argparse.ArgumentParser(description="")
-    arg_parser.add_argument(
-        'config',
-        metavar='config_json_file',
-        default='None',
-        help='The Configuration file in json format')
-    args = arg_parser.parse_args()
 
-    # parse the config json file
-    config = process_config(args.config)
+@hydra.main(version_base=None, config_path="configs", config_name="config")
+def main(cfg: DictConfig):
+    print(f"Working directory : {os.getcwd()}")
+    print(f"Output directory  : {hydra.core.hydra_config.HydraConfig.get().runtime.output_dir}")
 
     # Create the Agent and pass all the configuration to it then run it..
-    agent_class = globals()[config.agent]
-    agent = agent_class(config)
+
+    
+    trainer_class = globals()[cfg.trainer]
+    agent = trainer_class(cfg)
     agent.run()
     agent.finalize()
 
