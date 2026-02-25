@@ -2,8 +2,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset, random_split, TensorDataset
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
-from drive_and_act import DriveAndAct
-class GenericDataModule:
+from .drive_and_act import DriveAndAct
+
+
+
+class DnADataModule:
     def __init__(self, config):
         self.config = config
         # Atributos que se llenarán en setup()

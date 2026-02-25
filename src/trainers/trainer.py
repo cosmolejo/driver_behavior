@@ -14,10 +14,11 @@ from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
 
-from trainer.base import BaseAgent
+from .base import  BaseTrainer
 
-from models.nn.mnist import Mnist
-from datasets.mnist import MnistDataLoader
+from models.nn.mobileNet import mobilenet_v3_small
+
+
 
 from tensorboardX import SummaryWriter
 from utils.metrics import AverageMeter, AverageMeterList
@@ -28,17 +29,25 @@ cudnn.benchmark = True
 import logging
 
 
-class SafeDrivingTrainer(BaseAgent):
+class SafeDrivingTrainer(BaseTrainer):
 
     def __init__(self, config, data_module=None,):
         self.config = config
         self.logger = logging.getLogger(self.config.trainer)
 
+
         # define models
-        self.model = Mnist()
+        self.model = mobilenet_v3_small()
+
+
+        self.data_module = data_module
+
+        self.data_module.setup(self.config)
 
         # define data_loader
-        self.data_loader = MnistDataLoader(config=config)
+        self.train_loader = self.data_module.train_loader()
+        self.test_loader = self.data_module.test_loader()
+
 
         # define loss
         self.loss = nn.NLLLoss()
