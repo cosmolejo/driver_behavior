@@ -33,12 +33,12 @@ class DriveAndAct(Dataset):
         le = LabelEncoder()
         self.y = le.fit_transform(self.y)
 
-#TODO: adaptar funciones para retornar videos 'on demand'
+
     def __getitem__(self, index: int):
         sample = self.X[index]
         video = slice_frame(self.dataset,
                             {'file_id': sample[0], 'frame_start': sample[1], 'frame_end': sample[2]})
-        #images = Image.fromarray(np.uint8(np.array(sample[0]).reshape(28, 28) * 255))
+        video = [Image.fromarray(np.uint8(frame * 255)).resize((224, 224)) for frame in video]
         label = self.y[index]
         # if self.transform is not None:
         #     video = self.transform(np.array(video))
