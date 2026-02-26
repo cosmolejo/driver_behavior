@@ -14,6 +14,8 @@ cuda: true
 gpu_device: 0
 seed: 306638
 
+
+model: mobilenet_v3_small
 some_model_attribute: 0
 
 batch_size: 64
@@ -40,5 +42,6 @@ num_workers: 2
 pin_memory: true
 async_loading: true
 
-data_mode": train_test
-data_folder": ''
+data_mode: train_test
+data_path: /home/antares/Tesis_Data/Drive_and_Act/kinect_color
+label_path: /home/antares/driver_behavior/datasets/

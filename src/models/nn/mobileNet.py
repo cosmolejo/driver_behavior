@@ -364,7 +364,7 @@ class MobileNet_V3_Small_Weights(WeightsEnum):
 
 @register_model()
 @handle_legacy_interface(weights=("pretrained", MobileNet_V3_Large_Weights.IMAGENET1K_V1))
-def mobilenet_v3_large(
+def mobilenet_v3_large_local(
     *, weights: Optional[MobileNet_V3_Large_Weights] = None, progress: bool = True, **kwargs: Any
 ) -> MobileNetV3:
     """
@@ -395,7 +395,7 @@ def mobilenet_v3_large(
 
 @register_model()
 @handle_legacy_interface(weights=("pretrained", MobileNet_V3_Small_Weights.IMAGENET1K_V1))
-def mobilenet_v3_small(
+def mobilenet_v3_small_local(
     *, weights: Optional[MobileNet_V3_Small_Weights] = None, progress: bool = True, **kwargs: Any
 ) -> MobileNetV3:
     """

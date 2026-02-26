@@ -11,12 +11,13 @@ Main
 
 
 
-from omegaconf import DictConfig, OmegaConf
 import hydra
-import os
-from pprint import pprint
-from data import *
-from trainers import *
+import torch.optim as optim
+from omegaconf import DictConfig
+from torch import nn
+
+from models.nn.nn_factory import ModelFactory
+
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
@@ -28,8 +29,17 @@ def main(cfg: DictConfig):
     data_module_class = globals()[cfg.data_module]
     datamodule = data_module_class(cfg)
     trainer_class = globals()[cfg.trainer]
-    agent = trainer_class(cfg, datamodule)
-    print(agent.config, agent.tr)
+    models_class = ModelFactory.get_model(cfg.model)
+    model = models_class()
+
+    loss = nn.NLLLoss()
+
+    # define optimizer
+    optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum)
+
+
+    agent = trainer_class(cfg, datamodule, model, loss, optimizer)
+    print(agent.train_loader)
     #agent.run()
     #agent.finalize()
 

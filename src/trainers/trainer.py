@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 from .base import  BaseTrainer
 
-from models.nn.mobileNet import mobilenet_v3_small
+
 
 
 
@@ -31,30 +31,29 @@ import logging
 
 class SafeDrivingTrainer(BaseTrainer):
 
-    def __init__(self, config, data_module=None,):
+    def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None):
         self.config = config
         self.logger = logging.getLogger(self.config.trainer)
 
 
         # define models
-        self.model = mobilenet_v3_small()
+        self.model = model
 
 
         self.data_module = data_module
 
-        self.data_module.setup(self.config)
+        self.data_module.setup()
 
         # define data_loader
-        self.train_loader = self.data_module.train_loader()
-        self.test_loader = self.data_module.test_loader()
+        self.train_loader = self.data_module.train_dataloader()
+        self.test_loader = self.data_module.test_dataloader()
 
 
         # define loss
-        self.loss = nn.NLLLoss()
+        self.loss = loss
 
         # define optimizer
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.config.learning_rate, momentum=self.config.momentum)
-
+        self.optimizer = optimizer
         # initialize counter
         self.current_epoch = 0
         self.current_iteration = 0
