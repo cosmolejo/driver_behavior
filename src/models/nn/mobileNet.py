@@ -17,8 +17,8 @@ __all__ = [
     "MobileNetV3",
     "MobileNet_V3_Large_Weights",
     "MobileNet_V3_Small_Weights",
-    "mobilenet_v3_large",
-    "mobilenet_v3_small",
+    "mobilenet_v3_large_local",
+    "mobilenet_v3_small_local",
 ]
 
 
@@ -176,6 +176,9 @@ class MobileNetV3(nn.Module):
         # building last several layers
         lastconv_input_channels = inverted_residual_setting[-1].out_channels
         lastconv_output_channels = 6 * lastconv_input_channels
+
+        self.output_channels = lastconv_output_channels
+
         layers.append(
             Conv2dNormActivation(
                 lastconv_input_channels,
@@ -213,14 +216,13 @@ class MobileNetV3(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
 
-        x = self.classifier(x)
-
         return x
 
     def forward(self, x: Tensor) -> Tensor:
         return self._forward_impl(x)
 
-
+    def output_channels(self) -> int:
+        return self.output_channels
 def _mobilenet_v3_conf(
     arch: str, width_mult: float = 1.0, reduced_tail: bool = False, dilated: bool = False, **kwargs: Any
 ):

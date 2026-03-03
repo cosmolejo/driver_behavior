@@ -1,28 +1,13 @@
 """
 Mnist Main agent, as mentioned in the tutorial
 """
-import numpy as np
-
-from tqdm import tqdm
-import shutil
-import random
 
 import torch
-from torch import nn
-from torch.backends import cudnn
-from torch.autograd import Variable
-import torch.optim as optim
 import torch.nn.functional as F
+from torch.backends import cudnn
 
-from .base import  BaseTrainer
-
-
-
-
-
-from tensorboardX import SummaryWriter
-from utils.metrics import AverageMeter, AverageMeterList
 from utils.misc import print_cuda_statistics
+from .base import BaseTrainer
 
 cudnn.benchmark = True
 
@@ -132,17 +117,18 @@ class SafeDrivingTrainer(BaseTrainer):
         """
 
         self.model.train()
-        for batch_idx, (data, target) in enumerate(self.data_loader.train_loader):
+        for batch_idx, (data, target) in enumerate(self.train_loader):
             data, target = data.to(self.device), target.to(self.device)
-            self.optimizer.zero_grad()
-            output = self.model(data)
-            loss = F.nll_loss(output, target)
-            loss.backward()
-            self.optimizer.step()
-            if batch_idx % self.config.log_interval == 0:
-                self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    self.current_epoch, batch_idx * len(data), len(self.data_loader.train_loader.dataset),
-                           100. * batch_idx / len(self.data_loader.train_loader), loss.item()))
+            for frame in data:
+                self.optimizer.zero_grad()
+                output = self.model(frame)
+                loss = F.nll_loss(output, target)
+                loss.backward()
+                self.optimizer.step()
+                if batch_idx % self.config.log_interval == 0:
+                    self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                        self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                               100. * batch_idx / len(self.train_loader), loss.item()))
             self.current_iteration += 1
 
     def validate(self):
@@ -154,17 +140,17 @@ class SafeDrivingTrainer(BaseTrainer):
         test_loss = 0
         correct = 0
         with torch.no_grad():
-            for data, target in self.data_loader.test_loader:
+            for data, target in self.test_loader:
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 test_loss += F.nll_loss(output, target, size_average=False).item()  # sum up batch loss
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct += pred.eq(target.view_as(pred)).sum().item()
 
-        test_loss /= len(self.data_loader.test_loader.dataset)
+        test_loss /= len(self.test_loader.dataset)
         self.logger.info('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-            test_loss, correct, len(self.data_loader.test_loader.dataset),
-            100. * correct / len(self.data_loader.test_loader.dataset)))
+            test_loss, correct, len(self.test_loader.dataset),
+            100. * correct / len(self.test_loader.dataset)))
     def finalize(self):
         """
         Finalizes all the operations of the 2 Main classes of the process, the operator and the data loader

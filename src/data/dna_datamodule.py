@@ -1,5 +1,5 @@
-import torch
-from torch.utils.data import DataLoader, Dataset, random_split, TensorDataset
+
+from torch.utils.data import DataLoader, random_split
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
 from .drive_and_act import DriveAndAct
@@ -27,13 +27,8 @@ class DnADataModule:
         Paso 2: Transformaciones, splits y creación de Datasets.
         Se ejecuta en cada GPU individualmente.
         """
-        # Aquí crearías tu instancia de la clase VideoDataset que ya tienes
         full_dataset = DriveAndAct(self.config)
 
-
-
-        # Podrías cargar un test_ds por separado si tienes otro dataframe
-        # self.test_ds = TuCustomVideoDataset(self.test_df)
         if self.config.data_mode == "train_test_val":
 
             train_size = int(0.8 * len(full_dataset))
@@ -52,8 +47,9 @@ class DnADataModule:
             )
 
         elif self.config.data_mode == "kfolds":
-            skf = StratifiedKFold(n_splits=self.config.n_folds, shuffle=True, random_state=self.config.seed)
-            index = list(skf.split(X, y))
+            raise Exception("Not implemented yet")
+            #skf = StratifiedKFold(n_splits=self.config.n_folds, shuffle=True, random_state=self.config.seed)
+            #index = list(skf.split(X, y))
 
         else:
             raise Exception("Please specify in the json a specified mode in data_mode")

@@ -7,7 +7,7 @@ hydra:
     subdir: ${hydra.job.num}
 
 exp_name: exp_0
-trainer: SafeDrivingTrainer
+trainer: safe_driving
 mode: train
 
 cuda: true
@@ -15,8 +15,22 @@ gpu_device: 0
 seed: 306638
 
 
-model: mobilenet_v3_small
-some_model_attribute: 0
+
+backbone_model: mobilenet_v3_small
+
+
+temporal_model:
+  model: LSTM
+  input_size: default
+  hidden_size: default
+  num_layers: 2
+  bidirectional: true
+  batch_first: true
+
+
+model:
+  name: classifier
+  num_classes: 5
 
 batch_size: 64
 test_batch_size: 1000
@@ -37,7 +51,7 @@ validate_every: 2
 
 checkpoint_file: checkpoint.pth.tar
 
-data_module: DnADataModule
+data_module: drive_and_act
 num_workers: 2
 pin_memory: true
 async_loading: true
