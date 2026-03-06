@@ -117,18 +117,18 @@ class SafeDrivingTrainer(BaseTrainer):
         """
 
         self.model.train()
-        for batch_idx, (data, target) in enumerate(self.train_loader):
-            data, target = data.to(self.device), target.to(self.device)
-            for frame in data:
-                self.optimizer.zero_grad()
-                output = self.model(frame)
-                loss = F.nll_loss(output, target)
-                loss.backward()
-                self.optimizer.step()
-                if batch_idx % self.config.log_interval == 0:
-                    self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
-                               100. * batch_idx / len(self.train_loader), loss.item()))
+        for batch_idx, (data, target, lengths) in enumerate(self.train_loader):
+            data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
+
+            self.optimizer.zero_grad()
+            output = self.model(data, lengths)
+            loss = F.nll_loss(output, target)
+            loss.backward()
+            self.optimizer.step()
+            if batch_idx % self.config.log_interval == 0:
+                self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                           100. * batch_idx / len(self.train_loader), loss.item()))
             self.current_iteration += 1
 
     def validate(self):

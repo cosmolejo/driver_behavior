@@ -2,6 +2,8 @@
 
 
 """
+import torch
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch import nn
 
 
@@ -18,9 +20,24 @@ class ClassifierModel(nn.Module):
         self.backbone_model = backbone_model
         self.temporal_model = temporal_model
         self.last_layer = nn.Linear(2 * input_size, num_classes)
+        self.sigmoid = nn.Sigmoid()
         #TODO: add sigmoid for classification
-    def forward(self, x_input):
+    def forward(self, x_input, lengths):
+        batch_size = x_input.size(0)
+        num_frames = x_input.size(1)
+
+        x_input = x_input.view(-1, x_input.shape[2], x_input.shape[3], x_input.shape[4])
         x = self.backbone_model(x_input)
-        x = self.temporal_model(x)
+        x = x.view(batch_size, num_frames, -1)
+        x_packed = pack_padded_sequence(
+            x, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        x_packed, (h_n, c_n) = self.temporal_model(x_packed)
+
+        x, _ = pad_packed_sequence(x_packed, batch_first=True)
+        x = x[torch.arange(batch_size), lengths - 1]
+
         x = self.last_layer(x)
+        x = self.sigmoid(x)
+
         return x

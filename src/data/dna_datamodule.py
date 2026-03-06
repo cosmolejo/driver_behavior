@@ -1,4 +1,5 @@
-
+import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, random_split
 from sklearn.model_selection import train_test_split, StratifiedKFold
 
@@ -60,7 +61,8 @@ class DnADataModule:
             batch_size=self.config['batch_size'],
             shuffle=True,
             num_workers=self.config['num_workers'],
-            pin_memory=True  # Recomendado para entrenamiento en GPU
+            pin_memory=True,  # Recomendado para entrenamiento en GPU
+            collate_fn=self.custom_collate_fn
         )
 
     def val_dataloader(self):
@@ -69,7 +71,8 @@ class DnADataModule:
                 self.val_ds,
                 batch_size=self.config['batch_size'],
                 shuffle=False,
-                num_workers=self.config['num_workers']
+                num_workers=self.config['num_workers'],
+                collate_fn=self.custom_collate_fn
             )
         else:
             raise Exception(" Validation dataset not specified in configuration")
@@ -79,5 +82,26 @@ class DnADataModule:
             self.test_ds,
             batch_size=self.config['batch_size'],
             shuffle=False,
-            num_workers=self.config['num_workers']
+            num_workers=self.config['num_workers'],
+            collate_fn=self.custom_collate_fn
         )
+
+    @staticmethod
+    def custom_collate_fn(batch):
+        # 1. Separamos los datos del batch
+        videos = [v for v, _ in batch]
+        labels = [label for _, label in batch]
+
+
+        lengths = [v.shape[0] for v in videos]
+        lengths_tensor = torch.tensor(lengths)
+
+        # 2. Rellenamos los videos con ceros (Padding)
+        videos_padded = pad_sequence(videos, batch_first=True)
+
+        # 3. Convertimos las etiquetas a un tensor matemático
+        labels_tensor = torch.tensor(labels)
+
+        # Retornamos la tupla que espera el bucle de entrenamiento
+        return videos_padded, labels_tensor, lengths_tensor
+
