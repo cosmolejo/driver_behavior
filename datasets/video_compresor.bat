@@ -16,7 +16,7 @@ for /r "dmd" %%F in (*.mp4) do (
 
         if not exist "!output_file!" (
             echo [PROCESANDO] %%~nxF
-            ffmpeg -y -i "%%F" -c:v libx265 -crf 28 -preset fast -vf scale=240:240 -r 30 -an "!output_file!"
+            ffmpeg -y -i "%%F" -c:v libx265 -crf 28 -preset fast -vf scale=-2:240 -r 30 -an "!output_file!"
         ) else (
             echo [SALTANDO] %%~nxF - Ya fue comprimido previamente.
         )
