@@ -140,9 +140,9 @@ class SafeDrivingTrainer(BaseTrainer):
         test_loss = 0
         correct = 0
         with torch.no_grad():
-            for data, target in self.test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data)
+            for data, target , lengths in self.test_loader:
+                data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
+                output = self.model(data, lengths)
                 test_loss += F.nll_loss(output, target, size_average=False).item()  # sum up batch loss
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct += pred.eq(target.view_as(pred)).sum().item()
