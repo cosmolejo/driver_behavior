@@ -114,8 +114,8 @@ class VOCDataLoader:
             train = TensorDataset(train_data, train_labels)
             valid = TensorDataset(valid_data, valid_labels)
 
-            self.train_loader = DataLoader(train, batch_size=config.batch_size, shuffle=True)
-            self.valid_loader = DataLoader(valid, batch_size=config.batch_size, shuffle=False)
+            self.train_loader = DataLoader(train, batch_size=config.batch_size, shuffle=True, num_workers=self.config.num_workers)
+            self.valid_loader = DataLoader(valid, batch_size=config.batch_size, shuffle=False, num_workers=self.config.num_workers)
 
         elif self.config.mode == 'train':
             train_set = VOC('train', self.config.data_root,

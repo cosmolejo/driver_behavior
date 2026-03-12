@@ -19,13 +19,16 @@ from data.data_factory import DataFactory
 from trainers.trainer_factory import TrainerFactory
 from models.nn.nn_factory import ModelFactory
 
-
+import mlflow
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
 
+    mlflow.set_tracking_uri('file://' + hydra.core.hydra_config.HydraConfig.get().runtime.output_dir + '/mlruns')
+    mlflow.set_experiment(cfg.exp_name)
 
     # Create the Agent and pass all the configuration to it then run it.
+
 
     data_module_class = DataFactory.get_data(cfg.data_module)
     datamodule = data_module_class(cfg)
@@ -51,7 +54,7 @@ def main(cfg: DictConfig):
     loss = nn.NLLLoss()
 
     # define optimizer
-    optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum)
+    optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
 
     trainer_class = TrainerFactory.get_trainer(cfg.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)

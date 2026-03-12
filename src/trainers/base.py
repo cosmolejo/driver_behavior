@@ -47,7 +47,7 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def train_one_epoch(self):
+    def train_one_epoch(self, epoch):
         """
         One epoch of training
         :return:

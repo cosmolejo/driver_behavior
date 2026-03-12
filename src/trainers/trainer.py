@@ -1,11 +1,11 @@
 """
 Mnist Main agent, as mentioned in the tutorial
 """
-
+import mlflow
 import torch
 import torch.nn.functional as F
 from torch.backends import cudnn
-
+from torch.utils.tensorboard import SummaryWriter
 from utils.misc import print_cuda_statistics
 from .base import BaseTrainer
 
@@ -70,7 +70,10 @@ class SafeDrivingTrainer(BaseTrainer):
         # Model Loading from the latest checkpoint if not found start from scratch.
         self.load_checkpoint(self.config.checkpoint_file)
         # Summary Writer
-        self.summary_writer = None
+        self.writer = SummaryWriter()
+
+
+
 
     def load_checkpoint(self, file_name):
         """
@@ -106,30 +109,36 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         for epoch in range(1, self.config.max_epoch + 1):
-            self.train_one_epoch()
+            self.train_one_epoch(epoch)
             self.validate()
 
             self.current_epoch += 1
-    def train_one_epoch(self):
+    def train_one_epoch(self,epoch):
         """
         One epoch of training
         :return:
         """
+        with mlflow.start_run():
+            mlflow.log_param("Config", self.config)
+            self.model.train()
+            for batch_idx, (data, target, lengths) in enumerate(self.train_loader):
+                data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
 
-        self.model.train()
-        for batch_idx, (data, target, lengths) in enumerate(self.train_loader):
-            data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
+                self.optimizer.zero_grad()
+                output = self.model(data, lengths)
+                loss = F.nll_loss(output, target)
+                self.writer.add_scalar("Loss/train", loss, epoch)
+                loss.backward()
+                self.optimizer.step()
+                if batch_idx % self.config.log_interval == 0:
+                    self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                        self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                               100. * batch_idx / len(self.train_loader), loss.item()))
 
-            self.optimizer.zero_grad()
-            output = self.model(data, lengths)
-            loss = F.nll_loss(output, target)
-            loss.backward()
-            self.optimizer.step()
-            if batch_idx % self.config.log_interval == 0:
-                self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
-                           100. * batch_idx / len(self.train_loader), loss.item()))
-            self.current_iteration += 1
+                mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
+                self.current_iteration += 1
+
+
 
     def validate(self):
         """
@@ -151,9 +160,11 @@ class SafeDrivingTrainer(BaseTrainer):
         self.logger.info('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
             test_loss, correct, len(self.test_loader.dataset),
             100. * correct / len(self.test_loader.dataset)))
+        self.writer.flush()
     def finalize(self):
         """
         Finalizes all the operations of the 2 Main classes of the process, the operator and the data loader
         :return:
         """
-        pass
+        self.writer.close()
+
