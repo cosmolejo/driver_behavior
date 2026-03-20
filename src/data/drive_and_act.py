@@ -31,6 +31,7 @@ class DriveAndAct(Dataset):
         le = LabelEncoder()
         self.y = le.fit_transform(self.y)
 
+
     def __getitem__(self, index: int):
         sample = self.X[index]
         video = slice_frame(self.dataset,

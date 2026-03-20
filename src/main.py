@@ -51,7 +51,7 @@ def main(cfg: DictConfig):
         backbone, temporal, input_size, cfg.model.num_classes)
 
 
-    loss = nn.NLLLoss()
+    loss = nn.CrossEntropyLoss()
 
     # define optimizer
     optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
