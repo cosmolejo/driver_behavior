@@ -109,7 +109,25 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         for epoch in range(1, self.config.max_epoch + 1):
-            self.train_one_epoch(epoch)
+            with mlflow.start_run():
+                mlflow.log_param("Config", self.config)
+                self.model.train()
+                for batch_idx, (data, target) in enumerate(self.train_loader):
+                    data, target = data.to(self.device), target.to(self.device)
+
+                    self.optimizer.zero_grad()
+                    output = self.model(data)
+                    loss = self.loss(output, target)
+                    self.writer.add_scalar("Loss/train", loss, epoch)
+                    loss.backward()
+                    self.optimizer.step()
+                    if batch_idx % self.config.log_interval == 0:
+                        self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                            self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                                                100. * batch_idx / len(self.train_loader), loss.item()))
+
+                    mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
+                    self.current_iteration += 1
             self.validate()
 
             self.current_epoch += 1
@@ -118,25 +136,7 @@ class SafeDrivingTrainer(BaseTrainer):
         One epoch of training
         :return:
         """
-        with mlflow.start_run():
-            mlflow.log_param("Config", self.config)
-            self.model.train()
-            for batch_idx, (data, target, lengths) in enumerate(self.train_loader):
-                data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
-
-                self.optimizer.zero_grad()
-                output = self.model(data, lengths)
-                loss = F.nll_loss(output, target)
-                self.writer.add_scalar("Loss/train", loss, epoch)
-                loss.backward()
-                self.optimizer.step()
-                if batch_idx % self.config.log_interval == 0:
-                    self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
-                               100. * batch_idx / len(self.train_loader), loss.item()))
-
-                mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
-                self.current_iteration += 1
+        pass
 
 
 
@@ -149,10 +149,10 @@ class SafeDrivingTrainer(BaseTrainer):
         test_loss = 0
         correct = 0
         with torch.no_grad():
-            for data, target , lengths in self.test_loader:
-                data, target, lengths = data.to(self.device), target.to(self.device), lengths.to(self.device)
-                output = self.model(data, lengths)
-                test_loss += F.nll_loss(output, target, size_average=False).item()  # sum up batch loss
+            for data, target in self.test_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                output = self.model(data)
+                test_loss += self.loss(output, target ).item()  # sum up batch loss
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct += pred.eq(target.view_as(pred)).sum().item()
 

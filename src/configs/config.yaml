@@ -40,11 +40,13 @@ temporal_model:
   batch_first: true
 
 
+window_size: 15
+model_type: temporal
 model:
-  name: classifier
+  name: static_classifier
   num_classes: 4
 
-batch_size: 1
+batch_size: 8
 test_batch_size: 10
 
 learning_rate: 0.001
