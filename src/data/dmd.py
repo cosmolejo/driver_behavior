@@ -20,10 +20,11 @@ class DMD(Dataset):
         self.window_size = config.window_size
         self.model_type = config.model_type
         self.dataset = config.data_path
+        self.stride = config.stride
 
         # Cargar los datos crudos
-        conv = {1: lambda x: int(x), 2: lambda x: int(x), 4: lambda x: int(x)}
-        data = np.loadtxt(self.config.label_path + "distracted_driving.csv", dtype=str, delimiter=",", skiprows=1,
+        conv = { 1: lambda x: int(x), 2: lambda x: int(x)}
+        data = np.loadtxt(self.config.label_path + "dmd_vicomtech.csv", dtype=str, delimiter=",", skiprows=1,
                           converters=conv)
 
         self.samples = []
@@ -31,10 +32,11 @@ class DMD(Dataset):
 
         # Procesar los slices
         for row in data:
-            file_id = row.strip()
-            f_start = row[1]
-            f_end = row[2]
-            label = row[3].strip()
+            file_path = '_'.join(a.split('_')[:-2])
+            file_id = f'{file_path}_face_240.mp4'
+            f_start = int(row[2])
+            f_end = int(row[3])
+            label = row[4].strip()
 
             delta = f_end - f_start
 
@@ -51,7 +53,7 @@ class DMD(Dataset):
                     raw_labels.append(label)
                 else:
                     # Crear ventanas consecutivas (puedes ajustar el 'stride' si quieres solapamiento)
-                    stride = self.window_size
+                    stride = self.stride
                     for start in range(f_start, f_end - self.window_size + 1, stride):
                         self.samples.append(
                             {'file_id': file_id, 'frame_start': start, 'frame_end': start + self.window_size})

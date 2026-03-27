@@ -30,8 +30,8 @@ def main(cfg: DictConfig):
     # Create the Agent and pass all the configuration to it then run it.
 
 
-    data_module_class = DataFactory.get_data(cfg.data_module)
-    datamodule = data_module_class(cfg)
+    datamodule = DataFactory.get_data(cfg)
+
 
     backbone_class = ModelFactory.get_model(cfg.backbone_model)
     backbone = backbone_class()

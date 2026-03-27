@@ -2,26 +2,32 @@ import torch
 from torch.utils.data import DataLoader, random_split
 from .drive_and_act import DriveAndAct
 
-class DnADataModule:
-    def __init__(self, config):
+class DataModule:
+    def __init__(self, config, dataset ):
         self.config = config
         self.train_ds = None
         self.val_ds = None
         self.test_ds = None
+        self.dataset = dataset
 
 
 
     def setup(self):
-        full_dataset = DriveAndAct(self.config)
+        full_dataset = self.dataset(self.config)
 
         if self.config.data_mode == "train_test_val":
             train_size = int(0.8 * len(full_dataset))
-            val_size = int(0.2 * len(full_dataset) - train_size)
+            val_size = int(0.1 * len(full_dataset))
             test_size = len(full_dataset) - train_size - val_size
             self.train_ds, self.test_ds, self.val_ds = random_split(
                 full_dataset, [train_size, test_size, val_size]
             )
-        # elif ... (mantén tu lógica adicional de split)
+        elif self.config.data_mode == "train_test":
+            train_size = int(0.8 * len(full_dataset))
+            test_size = len(full_dataset) - train_size
+            self.train_ds, self.test_ds = random_split(
+                full_dataset, [train_size, test_size]
+            )
 
     def train_dataloader(self):
         return DataLoader(
@@ -30,7 +36,6 @@ class DnADataModule:
             shuffle=True,
             num_workers=self.config['num_workers'],
             pin_memory=True
-            # collate_fn=self.custom_collate_fn  <-- ¡Eliminado! PyTorch se encarga.
         )
 
     def val_dataloader(self):

@@ -20,6 +20,7 @@ class DriveAndAct(Dataset):
         self.window_size = config.window_size
         self.model_type = config.model_type
         self.dataset = config.data_path
+        self.stride = config.stride
 
         # Cargar los datos crudos
         conv = {1: lambda x: int(x), 2: lambda x: int(x), 4: lambda x: int(x)}
@@ -31,9 +32,9 @@ class DriveAndAct(Dataset):
 
         # Procesar los slices
         for row in data:
-            file_id = row.strip()
-            f_start = row[1]
-            f_end = row[2]
+            file_id = row[0].strip()
+            f_start = int(row[1])
+            f_end = int(row[2])
             label = row[3].strip()
 
             delta = f_end - f_start
@@ -51,8 +52,7 @@ class DriveAndAct(Dataset):
                     raw_labels.append(label)
                 else:
                     # Crear ventanas consecutivas (puedes ajustar el 'stride' si quieres solapamiento)
-                    stride = self.window_size
-                    for start in range(f_start, f_end - self.window_size + 1, stride):
+                    for start in range(f_start, f_end - self.window_size + 1, self.stride):
                         self.samples.append(
                             {'file_id': file_id, 'frame_start': start, 'frame_end': start + self.window_size})
                         raw_labels.append(label)

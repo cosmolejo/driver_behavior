@@ -41,9 +41,10 @@ temporal_model:
 
 
 window_size: 15
+stride: 1
 model_type: temporal
 model:
-  name: static_classifier
+  name: classifier
   num_classes: 4
 
 batch_size: 8
