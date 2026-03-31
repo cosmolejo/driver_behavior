@@ -2,6 +2,8 @@
 Drive and act Dataloader
 
 """
+import logging
+import random
 
 import torch
 import numpy as np
@@ -32,11 +34,11 @@ class DMD(Dataset):
 
         # Procesar los slices
         for row in data:
-            file_path = '_'.join(a.split('_')[:-2])
-            file_id = f'{file_path}_face_240.mp4'
-            f_start = int(row[2])
-            f_end = int(row[3])
-            label = row[4].strip()
+            file_path = '_'.join(row[0].strip().split('_')[:-2]).replace(';','_')
+            file_id = f'{file_path}_face_240'
+            f_start = int(row[1])
+            f_end = int(row[2])
+            label = row[3].strip()
 
             delta = f_end - f_start
 
@@ -64,20 +66,43 @@ class DMD(Dataset):
         self.y = le.fit_transform(raw_labels)
 
     def __getitem__(self, index: int):
-        sample = self.samples[index]
+        # sample = self.samples[index]
+        #
+        # # slice_frame ahora siempre retornará exactamente la cantidad de frames = window_size
+        # video = slice_frame(self.dataset, sample)
+        #
+        # video_tensors = [transforms.ToTensor()(
+        #     Image.fromarray(np.uint8(frame * 255)).resize((224, 224))
+        # ) for frame in video]
+        #
+        # # Apilar los tensores en una dimensión temporal: [window_size, C, H, W]
+        # source_video = torch.stack(video_tensors)
+        #
+        #
+        # label = self.y[index]
+        # return source_video, label
 
-        # slice_frame ahora siempre retornará exactamente la cantidad de frames = window_size
-        video = slice_frame(self.dataset, sample)
+        while True:
+            sample = self.samples[index]
+            video = slice_frame(self.dataset, sample)
 
+            # Verificamos si logramos extraer exactamente la cantidad requerida de frames reales
+            if len(video) == self.window_size:
+                break  # ¡Éxito! Salimos del bucle.
+
+            # Si faltaron frames (video corrupto o demasiado corto), elegimos otra muestra al azar
+            # Esto evita que el DataLoader reciba datos inconsistentes y no usamos padding.
+            logging.warning(f"Muestra {index} incompleta. Reintentando con otra...")
+            index = random.randint(0, len(self.samples) - 1)
+
+            # Continúa el flujo normal, sabiendo que 'video' tiene exactamente el tamaño de window_size
         video_tensors = [transforms.ToTensor()(
             Image.fromarray(np.uint8(frame * 255)).resize((224, 224))
         ) for frame in video]
 
-        # Apilar los tensores en una dimensión temporal: [window_size, C, H, W]
         source_video = torch.stack(video_tensors)
-
-
         label = self.y[index]
+
         return source_video, label
 
     def __len__(self):

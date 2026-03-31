@@ -47,8 +47,8 @@ model:
   name: classifier
   num_classes: 4
 
-batch_size: 8
-test_batch_size: 10
+batch_size: 64
+test_batch_size: 256
 
 learning_rate: 0.001
 
@@ -58,7 +58,7 @@ weight_decay: 0
 beta1: 0.5
 beta2: 0.999
 
-max_epoch: 15
+max_epoch: 50
 
 log_interval: 10
 
@@ -66,11 +66,11 @@ validate_every: 2
 
 checkpoint_file: checkpoint.pth.tar
 
-data_module: drive_and_act
-num_workers: 2
+data_module: dmd
+num_workers: 4
 pin_memory: true
 async_loading: true
 
 data_mode: train_test
-data_path: /home/antares/Tesis_Data/Drive_and_Act/kinect_color
-label_path: /home/antares/driver_behavior/datasets/
+data_path: /mnt/c/Users/alejandro.gomez/Documents/Vicomtech/
+label_path: /mnt/c/Users/alejandro.gomez/Documents/driver_behavior/datasets/

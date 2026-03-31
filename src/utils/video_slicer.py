@@ -33,38 +33,61 @@ def slice_frame(video_folder: str | Path, sample_dict: dict[str, Any]) -> list[A
             print('no se pudo abrir el video')
             return []
 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        if total_frames <= 0:
-            logging.warning("Video has no frames (or frame count unavailable): %s", video_path)
-            return []
+        # total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        # if total_frames <= 0:
+        #     logging.warning("Video has no frames (or frame count unavailable): %s", video_path)
+        #     return []
 
         # Clamp range to valid bounds.
         start_frame = max(0, start_frame)
-        end_frame = min(end_frame, total_frames - 1)
+        # end_frame = min(end_frame, total_frames - 1)
 
-        if start_frame > end_frame:
-            logging.warning("Invalid frame range for %s: %s-%s", file_id, start_frame, end_frame)
+        # if start_frame > end_frame:
+        #     logging.warning("Invalid frame range for %s: %s-%s", file_id, start_frame, end_frame)
+        #     return []
+        #
+        # sliced_frames: list[Any] = []
+        #
+        # cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        # cur = start_frame
+        # while cur <= end_frame:
+        #     ret, frame = cap.read()
+        #     if not ret:
+        #         logging.warning(
+        #             "Failed to read frame %s (requested %s-%s) from %s",
+        #             cur,
+        #             start_frame,
+        #             end_frame,
+        #             video_path,
+        #         )
+        #         break
+        #     sliced_frames.append(frame)
+        #     cur += 1
+        # Obtener los límites físicos reales del video
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        num_frames_needed = end_frame - start_frame
+
+        if num_frames_needed <= 0:
             return []
 
-        sliced_frames: list[Any] = []
+        # CORRECCIÓN SIN PADDING: Si el CSV pide frames fuera del video,
+        # retrocedemos el inicio para tomar exactamente 'num_frames_needed' reales del final.
+        if 0 < total_frames <= end_frame:
+            end_frame = total_frames - 1
+            start_frame = max(0, end_frame - num_frames_needed)
 
+        sliced_frames = []
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        cur = start_frame
-        while cur <= end_frame:
+
+        for _ in range(num_frames_needed):
             ret, frame = cap.read()
             if not ret:
-                logging.warning(
-                    "Failed to read frame %s (requested %s-%s) from %s",
-                    cur,
-                    start_frame,
-                    end_frame,
-                    video_path,
-                )
-                break
+                break  # El video terminó (OpenCV a veces reporta mal el total_frames)
             sliced_frames.append(frame)
-            cur += 1
 
+        # Devolverá los frames reales obtenidos (sin rellenar con nada)
         return sliced_frames
+
 
     except Exception:
         # Log full traceback; return a safe default to avoid None-propagation bugs.

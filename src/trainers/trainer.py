@@ -118,7 +118,7 @@ class SafeDrivingTrainer(BaseTrainer):
                     self.optimizer.zero_grad()
                     output = self.model(data)
                     loss = self.loss(output, target)
-                    self.writer.add_scalar("Loss/train", loss, epoch)
+                    self.writer.add_scalar("Loss/train", loss, batch_idx)
                     loss.backward()
                     self.optimizer.step()
                     if batch_idx % self.config.log_interval == 0:
