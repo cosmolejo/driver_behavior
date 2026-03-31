@@ -90,7 +90,7 @@ class SafeDrivingTrainer(BaseTrainer):
         :param is_best: boolean flag to indicate whether current checkpoint's accuracy is the best so far
         :return:
         """
-        pass
+        torch.save(self.model.state_dict(), file_name)
 
     def run(self):
         """
@@ -126,9 +126,12 @@ class SafeDrivingTrainer(BaseTrainer):
                             self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
                                                 100. * batch_idx / len(self.train_loader), loss.item()))
 
+
+
                     mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
                     self.current_iteration += 1
             self.validate()
+            self.save_checkpoint()
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
