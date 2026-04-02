@@ -16,7 +16,7 @@ import logging
 
 class SafeDrivingTrainer(BaseTrainer):
 
-    def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None):
+    def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None) -> None:
         self.config = config
         self.logger = logging.getLogger(self.config.trainer)
 
@@ -75,13 +75,14 @@ class SafeDrivingTrainer(BaseTrainer):
 
 
 
-    def load_checkpoint(self, file_name):
+    def load_checkpoint(self, file_name) -> None:
         """
         Latest checkpoint loader
         :param file_name: name of the checkpoint file
         :return:
         """
-        pass
+        self.model.load_state_dict(torch.load(file_name, weights_only=True))
+
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
         """
@@ -90,7 +91,7 @@ class SafeDrivingTrainer(BaseTrainer):
         :param is_best: boolean flag to indicate whether current checkpoint's accuracy is the best so far
         :return:
         """
-        torch.save(self.model.state_dict(), file_name)
+        torch.save(self.model.state_dict(), 'pretrained_weights/'+ file_name)
 
     def run(self):
         """
