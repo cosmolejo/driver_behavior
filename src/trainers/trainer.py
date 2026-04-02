@@ -81,7 +81,7 @@ class SafeDrivingTrainer(BaseTrainer):
         :param file_name: name of the checkpoint file
         :return:
         """
-        self.model.load_state_dict(torch.load(file_name, weights_only=True))
+        self.model.load_state_dict(torch.load( 'pretrained_weights/'+file_name, weights_only=True))
 
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
@@ -110,6 +110,7 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         for epoch in range(1, self.config.max_epoch + 1):
+            total_loss = 0
             with mlflow.start_run():
                 mlflow.log_param("Config", self.config)
                 self.model.train()
@@ -119,9 +120,13 @@ class SafeDrivingTrainer(BaseTrainer):
                     self.optimizer.zero_grad()
                     output = self.model(data)
                     loss = self.loss(output, target)
-                    self.writer.add_scalar("Loss/train", loss, batch_idx)
+                    self.writer.add_scalar("Loss/train_batch", loss, batch_idx)
+
                     loss.backward()
                     self.optimizer.step()
+
+                    total_loss += loss.item()
+
                     if batch_idx % self.config.log_interval == 0:
                         self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                             self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
@@ -131,6 +136,9 @@ class SafeDrivingTrainer(BaseTrainer):
 
                     mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
                     self.current_iteration += 1
+            avg_epoch_loss = total_loss / len(self.train_loader)
+            self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
+            self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.validate()
             self.save_checkpoint()
 
