@@ -81,10 +81,13 @@ class SafeDrivingTrainer(BaseTrainer):
         :param file_name: name of the checkpoint file
         :return:
         """
-        checkpoint = torch.load('checkpoint.pth')
+        try:
+            checkpoint = torch.load('checkpoint.pth')
 
-        self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        except FileNotFoundError:
+            self.logger.info("Checkpoint file not found. Starting from scratch")
 
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
