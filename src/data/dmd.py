@@ -23,6 +23,7 @@ class DMD(Dataset):
         self.model_type = config.model_type
         self.dataset = config.data_path
         self.stride = config.stride
+        self.camera = config.camera
 
         # Cargar los datos crudos
         conv = { 1: lambda x: int(x), 2: lambda x: int(x)}
@@ -35,7 +36,7 @@ class DMD(Dataset):
         # Procesar los slices
         for row in data:
             file_path = '_'.join(row[0].strip().split('_')[:-2]).replace(';','_')
-            file_id = f'{file_path}_face_240'
+            file_id = f'{file_path}_{self.camera}_240'
             f_start = int(row[1])
             f_end = int(row[2])
             label = row[3].strip()
