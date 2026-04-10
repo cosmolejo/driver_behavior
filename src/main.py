@@ -59,7 +59,8 @@ def main(cfg: DictConfig):
     trainer_class = TrainerFactory.get_trainer(cfg.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)
 
-    trainer.run()
+    #trainer.run()
+    trainer.validate()
     trainer.finalize()
 
 

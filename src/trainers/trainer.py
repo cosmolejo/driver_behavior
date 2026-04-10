@@ -3,7 +3,7 @@ Mnist Main agent, as mentioned in the tutorial
 """
 import mlflow
 import torch
-import torch.nn.functional as F
+import progressbar
 from torch.backends import cudnn
 from torch.utils.tensorboard import SummaryWriter
 from utils.misc import print_cuda_statistics
@@ -81,7 +81,10 @@ class SafeDrivingTrainer(BaseTrainer):
         :param file_name: name of the checkpoint file
         :return:
         """
-        self.model.load_state_dict(torch.load( 'pretrained_weights/'+file_name, weights_only=True))
+        checkpoint = torch.load('checkpoint.pth')
+
+        self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
@@ -91,7 +94,15 @@ class SafeDrivingTrainer(BaseTrainer):
         :param is_best: boolean flag to indicate whether current checkpoint's accuracy is the best so far
         :return:
         """
-        torch.save(self.model.state_dict(), 'pretrained_weights/'+ file_name)
+        # Save the state
+        checkpoint = {
+            'epoch': 10,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+
+        }
+        torch.save(checkpoint, 'pretrained_weights/'+ file_name)
+
 
     def run(self):
         """
@@ -161,12 +172,16 @@ class SafeDrivingTrainer(BaseTrainer):
         test_loss = 0
         correct = 0
         with torch.no_grad():
-            for data, target in self.test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data)
-                test_loss += self.loss(output, target ).item()  # sum up batch loss
-                pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-                correct += pred.eq(target.view_as(pred)).sum().item()
+            with progressbar.ProgressBar(max_value=100) as bar:
+                i = 0
+                for data, target in self.test_loader:
+                    data, target = data.to(self.device), target.to(self.device)
+                    output = self.model(data)
+                    test_loss += self.loss(output, target ).item()  # sum up batch loss
+                    pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    bar.update(100 *i / len(self.test_loader))
+                    i += 1
 
         test_loss /= len(self.test_loader.dataset)
         self.writer.add_scalar("Loss/test", test_loss, self.current_epoch)
