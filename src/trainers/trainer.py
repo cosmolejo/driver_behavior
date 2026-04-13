@@ -3,7 +3,7 @@ Mnist Main agent, as mentioned in the tutorial
 """
 import mlflow
 import torch
-import progressbar
+from tqdm import tqdm
 from torch.backends import cudnn
 from torch.utils.tensorboard import SummaryWriter
 from utils.misc import print_cuda_statistics
@@ -175,16 +175,15 @@ class SafeDrivingTrainer(BaseTrainer):
         test_loss = 0
         correct = 0
         with torch.no_grad():
-            with progressbar.ProgressBar(max_value=100) as bar:
                 i = 0
-                for data, target in self.test_loader:
+                for data, target in tqdm(self.test_loader):
                     data, target = data.to(self.device), target.to(self.device)
                     output = self.model(data)
                     test_loss += self.loss(output, target ).item()  # sum up batch loss
                     pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                     correct += pred.eq(target.view_as(pred)).sum().item()
-                    bar.update(100 *i / len(self.test_loader))
-                    i += 1
+                    # bar.update(100 *i / len(self.test_loader))
+                    # i += 1
 
         test_loss /= len(self.test_loader.dataset)
         self.writer.add_scalar("Loss/test", test_loss, self.current_epoch)
