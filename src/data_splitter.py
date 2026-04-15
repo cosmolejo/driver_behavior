@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import random_split
-from src.data.dmd import DMD
+from data.dmd import DMD
 import hydra
 from omegaconf import DictConfig
 
