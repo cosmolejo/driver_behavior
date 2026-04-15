@@ -67,21 +67,7 @@ class DMD(Dataset):
         self.y = le.fit_transform(raw_labels)
 
     def __getitem__(self, index: int):
-        # sample = self.samples[index]
-        #
-        # # slice_frame ahora siempre retornará exactamente la cantidad de frames = window_size
-        # video = slice_frame(self.dataset, sample)
-        #
-        # video_tensors = [transforms.ToTensor()(
-        #     Image.fromarray(np.uint8(frame * 255)).resize((224, 224))
-        # ) for frame in video]
-        #
-        # # Apilar los tensores en una dimensión temporal: [window_size, C, H, W]
-        # source_video = torch.stack(video_tensors)
-        #
-        #
-        # label = self.y[index]
-        # return source_video, label
+
 
         while True:
             sample = self.samples[index]

@@ -68,7 +68,7 @@ checkpoint_file: checkpoint_body.pth.tar
 camera: body
 
 data_module: dmd
-num_workers: 4
+num_workers: 2
 pin_memory: true
 async_loading: true
 

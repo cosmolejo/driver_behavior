@@ -15,9 +15,13 @@ class DataModule:
     def setup(self):
         full_dataset = self.dataset(self.config)
         label_path = self.config.label_path
-        train_idx = torch.load(label_path+'train_indices.pt')
-        val_idx = torch.load(label_path+'val_indices.pt')
-        test_idx = torch.load(label_path+'test_indices.pt')
+        train_idx = torch.load(label_path+'train_indices.pt', map_location='cpu')
+        val_idx = torch.load(label_path+'val_indices.pt', map_location='cpu')
+        test_idx = torch.load(label_path+'test_indices.pt', map_location='cpu')
+
+        if isinstance(train_idx, torch.Tensor): train_idx = train_idx.tolist()
+        if isinstance(val_idx, torch.Tensor): val_idx = val_idx.tolist()
+        if isinstance(test_idx, torch.Tensor): test_idx = test_idx.tolist()
 
         if self.config.data_mode == "train_test_val":
             self.train_ds = Subset(full_dataset, train_idx)
