@@ -3,12 +3,12 @@ Mnist Main agent, as mentioned in the tutorial
 """
 import mlflow
 import torch
-import progressbar
+from tqdm import tqdm
 from torch.backends import cudnn
 from torch.utils.tensorboard import SummaryWriter
 from utils.misc import print_cuda_statistics
 from .base import BaseTrainer
-
+from sklearn.metrics import precision_score, recall_score, f1_score
 cudnn.benchmark = True
 
 import logging
@@ -174,24 +174,35 @@ class SafeDrivingTrainer(BaseTrainer):
         self.model.eval()
         test_loss = 0
         correct = 0
+        all_preds = []
+        all_targets = []
         with torch.no_grad():
-            with progressbar.ProgressBar(max_value=100) as bar:
                 i = 0
-                for data, target in self.test_loader:
+                for data, target in tqdm(self.test_loader):
                     data, target = data.to(self.device), target.to(self.device)
                     output = self.model(data)
                     test_loss += self.loss(output, target ).item()  # sum up batch loss
                     pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                     correct += pred.eq(target.view_as(pred)).sum().item()
-                    bar.update(100 *i / len(self.test_loader))
-                    i += 1
+
+                    all_preds.extend(pred.view(-1).cpu().numpy())
+                    all_targets.extend(target.view(-1).cpu().numpy())
 
         test_loss /= len(self.test_loader.dataset)
+        accuracy = 100. * correct / len(self.test_loader.dataset)
+        precision = precision_score(all_targets, all_preds, average='macro', zero_division=0)
+        recall = recall_score(all_targets, all_preds, average='macro', zero_division=0)
+        f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
         self.writer.add_scalar("Loss/test", test_loss, self.current_epoch)
-        self.logger.info('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-            test_loss, correct, len(self.test_loader.dataset),
-            100. * correct / len(self.test_loader.dataset)))
-
+        self.writer.add_scalar("Metrics/Accuracy", accuracy, self.current_epoch)
+        self.writer.add_scalar("Metrics/Precision", precision, self.current_epoch)
+        self.writer.add_scalar("Metrics/Recall", recall, self.current_epoch)
+        self.writer.add_scalar("Metrics/F1-Score", f1, self.current_epoch)
+        self.logger.info(
+            f'\nTest set: Average loss: {test_loss:.4f}, '
+            f'Accuracy: {correct}/{len(self.test_loader.dataset)} ({accuracy:.0f}%), '
+            f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}\n'
+        )
     def finalize(self):
         """
         Finalizes all the operations of the 2 Main classes of the process, the operator and the data loader

@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader, random_split
-from .drive_and_act import DriveAndAct
+from torch.utils.data import Subset
 
 class DataModule:
     def __init__(self, config, dataset ):
@@ -14,20 +14,18 @@ class DataModule:
 
     def setup(self):
         full_dataset = self.dataset(self.config)
+        label_path = self.config.label_path
+        train_idx = torch.load(label_path+'train_indices.pt')
+        val_idx = torch.load(label_path+'val_indices.pt')
+        test_idx = torch.load(label_path+'test_indices.pt')
 
         if self.config.data_mode == "train_test_val":
-            train_size = int(0.8 * len(full_dataset))
-            val_size = int(0.1 * len(full_dataset))
-            test_size = len(full_dataset) - train_size - val_size
-            self.train_ds, self.test_ds, self.val_ds = random_split(
-                full_dataset, [train_size, test_size, val_size]
-            )
+            self.train_ds = Subset(full_dataset, train_idx)
+            self.val_ds = Subset(full_dataset, val_idx)
+            self.test_ds = Subset(full_dataset, test_idx)
         elif self.config.data_mode == "train_test":
-            train_size = int(0.8 * len(full_dataset))
-            test_size = len(full_dataset) - train_size
-            self.train_ds, self.test_ds = random_split(
-                full_dataset, [train_size, test_size]
-            )
+            self.train_ds = Subset(full_dataset, train_idx)
+            self.test_ds = Subset(full_dataset, test_idx)
 
     def train_dataloader(self):
         return DataLoader(
