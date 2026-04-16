@@ -33,22 +33,6 @@ def main(cfg: DictConfig):
     datamodule = DataFactory.get_data(cfg)
 
 
-    backbone_class = ModelFactory.get_model(cfg.backbone_model)
-    backbone = backbone_class()
-
-    temporal_class = ModelFactory.get_model(cfg.temporal_model.model)
-    input_size = backbone.output_channels if cfg.temporal_model.input_size == 'default' else cfg.temporal_model.input_size
-    hidden_size = backbone.output_channels if cfg.temporal_model.hidden_size == 'default' else cfg.temporal_model.hidden_size
-    temporal = temporal_class(
-        input_size = input_size,
-        hidden_size = hidden_size,
-        num_layers = cfg.temporal_model.num_layers,
-        batch_first = cfg.temporal_model.batch_first,
-        bidirectional = cfg.temporal_model.bidirectional
-    )
-
-    model = ModelFactory.get_model(cfg.model.name)(
-        backbone, temporal, input_size, cfg.model.num_classes)
 
 
     loss = nn.CrossEntropyLoss()

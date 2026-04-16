@@ -67,24 +67,23 @@ class DMD(Dataset):
         self.y = le.fit_transform(raw_labels)
 
     def __getitem__(self, index: int):
-        # sample = self.samples[index]
-        #
-        # # slice_frame ahora siempre retornará exactamente la cantidad de frames = window_size
-        # video = slice_frame(self.dataset, sample)
-        #
-        # video_tensors = [transforms.ToTensor()(
-        #     Image.fromarray(np.uint8(frame * 255)).resize((224, 224))
-        # ) for frame in video]
-        #
-        # # Apilar los tensores en una dimensión temporal: [window_size, C, H, W]
-        # source_video = torch.stack(video_tensors)
-        #
-        #
-        # label = self.y[index]
-        # return source_video, label
 
+        if self.config.setup == "multy_camera":
+            return self.get_one(index, 'face'), self.get_one(index, 'body')
+        else:
+            return self.get_one(index)
+
+
+    def __len__(self):
+        return len(self.samples)
+
+    def get_one(self, index: int, camera = None):
         while True:
             sample = self.samples[index]
+            if camera is not None:
+                file_path = str(sample['file_id']).split('_')
+                file_path[-2] = camera
+                sample['file_id'] = '_'.join(file_path)
             video = slice_frame(self.dataset, sample)
 
             # Verificamos si logramos extraer exactamente la cantidad requerida de frames reales
@@ -105,6 +104,3 @@ class DMD(Dataset):
         label = self.y[index]
 
         return source_video, label
-
-    def __len__(self):
-        return len(self.samples)
