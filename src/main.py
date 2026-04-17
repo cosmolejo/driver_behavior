@@ -37,7 +37,7 @@ def main(cfg: DictConfig):
     # define optimizer
     optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
 
-    trainer_class = TrainerFactory.get_trainer(cfg.trainer)
+    trainer_class = TrainerFactory.get_trainer(cfg.setup.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)
 
     match cfg.setup.setep:

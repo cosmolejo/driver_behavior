@@ -5,10 +5,13 @@
 from typing import Callable
 
 from .trainer import SafeDrivingTrainer
+from .trainer_multicam import MultiCamTrainer
+
 
 class TrainerFactory:
     models_dict = {
         'safe_driving': SafeDrivingTrainer,
+        'safe_driving_multicam': MultiCamTrainer,
     }
 
 

@@ -35,7 +35,7 @@ class SetupFactory:
         face_model = SetupFactory._base_model(cfg)
         body_model = SetupFactory._base_model(cfg)
 
-        model = ModelFactory.get_model(cfg.model.name)(
+        model = ModelFactory.get_model('multy_cam_classifier')(
             face_model, body_model, cfg.model.input_size, cfg.model.num_classes)
 
         return model

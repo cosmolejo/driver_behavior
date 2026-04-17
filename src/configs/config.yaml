@@ -19,7 +19,7 @@ hydra:
 
 
 exp_name: exp_0
-trainer: safe_driving
+
 
 
 cuda: true
@@ -33,6 +33,7 @@ backbone_model: mobilenet_v3_small
 setup:
   mode: multicamera
   step: train
+  trainer: safe_driving
 temporal_model:
   model: LSTM
   input_size: default

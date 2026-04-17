@@ -20,8 +20,8 @@ class MultiCamModel(nn.Module):
 
 
     def forward(self, x_face, x_body):
-        feat_cam1 = self.face_model(x_face)  # tamaño: [batch, 2 * input_size]
-        feat_cam2 = self.body_model(x_body)  # tamaño: [batch, 2 * input_size]
+        feat_cam1 = self.face_model(x_face).temporal_model  # tamaño: [batch, 2 * input_size]
+        feat_cam2 = self.body_model(x_body).temporal_model  # tamaño: [batch, 2 * input_size]
 
         # 2. Concatenar en la dimensión de las características (dim=1)
         combined_features = torch.cat((feat_cam1, feat_cam2), dim=1)  # tamaño: [batch, 4 * input_size]
@@ -34,7 +34,3 @@ class MultiCamModel(nn.Module):
 
         # Retornas esto y lo metes directamente a tu CrossEntropyLoss habitual
         return logits
-
-
-
-        return out
