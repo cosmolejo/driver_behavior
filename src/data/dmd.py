@@ -43,11 +43,11 @@ class DMD(Dataset):
 
             delta = f_end - f_start
 
-            if self.config.model_type == "static":
+            if self.config.model.type == "static":
                 self.samples.append({'file_id': file_id, 'frame_start': 0, 'frame_end': self.window_size})
                 raw_labels.append(label)
 
-            elif self.config.model_type == "temporal":
+            elif self.config.model.type == "temporal":
 
                 # Si la actividad es más corta que window_size, retrocedemos el inicio para asegurar el tamaño
                 if delta < self.window_size:

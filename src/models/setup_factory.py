@@ -38,9 +38,15 @@ class SetupFactory:
         model = ModelFactory.get_model(cfg.model.name)(
             face_model, body_model, cfg.model.input_size, cfg.model.num_classes)
 
-
+        return model
 
 
     mode_dict = {
         'face': _base_model,
+        'body': _base_model,
+        'multi_cam': _multi_model,
     }
+
+    @staticmethod
+    def get_model(mode: str) -> Callable:
+        return SetupFactory.mode_dict[mode]

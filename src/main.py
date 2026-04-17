@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 from torch import nn
 from data.data_factory import DataFactory
 from trainers.trainer_factory import TrainerFactory
-from models.nn.nn_factory import ModelFactory
+from models.setup_factory import SetupFactory
 
 import mlflow
 
@@ -27,13 +27,10 @@ def main(cfg: DictConfig):
     mlflow.set_tracking_uri('file://' + hydra.core.hydra_config.HydraConfig.get().runtime.output_dir + '/mlruns')
     mlflow.set_experiment(cfg.exp_name)
 
-    # Create the Agent and pass all the configuration to it then run it.
-
 
     datamodule = DataFactory.get_data(cfg)
 
-
-
+    model = SetupFactory.get_model(cfg.setup.mode)()
 
     loss = nn.CrossEntropyLoss()
 
@@ -43,7 +40,13 @@ def main(cfg: DictConfig):
     trainer_class = TrainerFactory.get_trainer(cfg.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)
 
-    trainer.run()
+    match cfg.setup.setep:
+        case 'train':
+            trainer.run()
+        case 'test':
+            trainer.validate()
+        case 'predict':
+            raise NotImplementedError
     trainer.finalize()
 
 

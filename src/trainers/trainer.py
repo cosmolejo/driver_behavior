@@ -90,11 +90,10 @@ class SafeDrivingTrainer(BaseTrainer):
             self.logger.info("Checkpoint file not found. Starting from scratch")
 
 
-    def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
+    def save_checkpoint(self, file_name="checkpoint.pth.tar"):
         """
         Checkpoint saver
         :param file_name: name of the checkpoint file
-        :param is_best: boolean flag to indicate whether current checkpoint's accuracy is the best so far
         :return:
         """
         # Save the state
@@ -154,7 +153,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.validate()
-            self.save_checkpoint()
+            self.save_checkpoint(file_name=self.config.checkpoint_file)
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
