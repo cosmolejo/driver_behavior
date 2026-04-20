@@ -82,8 +82,8 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('checkpoint.pth')
-
+            checkpoint = torch.load(file_name)
+            self.current_epoch =  checkpoint['epoch']
             self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         except FileNotFoundError:
@@ -99,7 +99,7 @@ class SafeDrivingTrainer(BaseTrainer):
         """
         # Save the state
         checkpoint = {
-            'epoch': 10,
+            'epoch': self.current_epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
 
@@ -117,13 +117,14 @@ class SafeDrivingTrainer(BaseTrainer):
 
         except KeyboardInterrupt:
             self.logger.info("You have entered CTRL+C.. Wait to finalize")
+            self.finalize()
 
     def train(self):
         """
         Main training loop
         :return:
         """
-        for epoch in range(1, self.config.max_epoch + 1):
+        for epoch in range(self.current_epoch, self.config.max_epoch + 1):
             total_loss = 0
             with mlflow.start_run():
                 mlflow.log_param("Config", self.config)
@@ -154,7 +155,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.validate()
-            self.save_checkpoint()
+            self.save_checkpoint(self.config.checkpoint_file)
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
