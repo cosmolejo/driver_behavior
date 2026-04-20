@@ -82,9 +82,9 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load(file_name)
+            checkpoint = torch.load('pretrained_weights/'+file_name)
             self.current_epoch =  checkpoint['epoch']
-            self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
+            self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         except FileNotFoundError:
             self.logger.info("Checkpoint file not found. Starting from scratch")
