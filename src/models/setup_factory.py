@@ -4,7 +4,7 @@
 """
 from typing import Callable
 from omegaconf import DictConfig
-from nn.nn_factory import ModelFactory
+from .nn.nn_factory import ModelFactory
 
 class SetupFactory:
 
@@ -35,8 +35,8 @@ class SetupFactory:
         face_model = SetupFactory._base_model(cfg)
         body_model = SetupFactory._base_model(cfg)
 
-        model = ModelFactory.get_model('multy_cam_classifier')(
-            face_model, body_model, cfg.model.input_size, cfg.model.num_classes)
+        model = ModelFactory.get_model('softmax_classifier')(
+            face_model, body_model)
 
         return model
 
@@ -44,7 +44,7 @@ class SetupFactory:
     mode_dict = {
         'face': _base_model,
         'body': _base_model,
-        'multi_cam': _multi_model,
+        'multicamera': _multi_model,
     }
 
     @staticmethod

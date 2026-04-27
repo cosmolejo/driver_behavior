@@ -18,8 +18,7 @@ class MultiCamTrainer(BaseTrainer):
 
     def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None) -> None:
         self.config = config
-        self.logger = logging.getLogger(self.config.trainer)
-
+        self.logger = logging.getLogger(self.config.setup.trainer)
 
         # define models
         self.model = model
@@ -32,6 +31,9 @@ class MultiCamTrainer(BaseTrainer):
         # define data_loader
         self.train_loader = self.data_module.train_dataloader()
         self.test_loader = self.data_module.test_dataloader()
+
+
+
 
 
         # define loss
@@ -72,9 +74,6 @@ class MultiCamTrainer(BaseTrainer):
         # Summary Writer
         self.writer = SummaryWriter()
 
-
-
-
     def load_checkpoint(self, file_name) -> None:
         """
         Latest checkpoint loader
@@ -82,30 +81,28 @@ class MultiCamTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('checkpoint.pth')
-
-            self.model.load_state_dict(torch.load( checkpoint['model_state_dict'], weights_only=True))
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            checkpoint = torch.load('pretrained_weights/' + file_name)
+            self.current_epoch = checkpoint['epoch']
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer = checkpoint['optimizer']
         except FileNotFoundError:
             self.logger.info("Checkpoint file not found. Starting from scratch")
 
-
-    def save_checkpoint(self, file_name="checkpoint.pth.tar"):
+    def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
         """
         Checkpoint saver
         :param file_name: name of the checkpoint file
+        :param is_best: boolean flag to indicate whether current checkpoint's accuracy is the best so far
         :return:
         """
         # Save the state
         checkpoint = {
-            'epoch': 10,
+            'epoch': self.current_epoch + 1,
             'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
+            'optimizer': self.optimizer,
 
         }
-        torch.save(checkpoint, 'pretrained_weights/'+ file_name)
-
-
+        torch.save(checkpoint, 'pretrained_weights/' + file_name)
     def run(self):
         """
         The main operator
@@ -127,11 +124,12 @@ class MultiCamTrainer(BaseTrainer):
             with mlflow.start_run():
                 mlflow.log_param("Config", self.config)
                 self.model.train()
-                for batch_idx, (data, target) in enumerate(self.train_loader):
-                    data, target = data.to(self.device), target.to(self.device)
+                for batch_idx, (data_face,data_body, target) in enumerate(self.train_loader):
+                    data_face, data_body,target_face = data_face.to(self.device),data_body.to(self.device), target_face.to(self.device)
+
 
                     self.optimizer.zero_grad()
-                    output = self.model(data)
+                    output = self.model(data_face,data_body)
                     loss = self.loss(output, target)
                     self.writer.add_scalar("Loss/train_batch", loss, batch_idx)
 
@@ -152,7 +150,7 @@ class MultiCamTrainer(BaseTrainer):
             avg_epoch_loss = total_loss / len(self.train_loader)
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
-            self.validate()
+            self.test()
             self.save_checkpoint(file_name=self.config.checkpoint_file)
 
             self.current_epoch += 1
@@ -165,7 +163,7 @@ class MultiCamTrainer(BaseTrainer):
 
 
 
-    def validate(self):
+    def test(self):
         """
         One cycle of model validation
         :return:

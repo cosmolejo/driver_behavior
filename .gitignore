@@ -334,3 +334,6 @@ pyrightconfig.json
 
 
 experiments/
+*/runs/
+/src/runs/
+/src/pretrained_weights/*.tar

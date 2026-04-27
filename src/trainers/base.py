@@ -55,7 +55,7 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def validate(self):
+    def test(self):
         """
         One cycle of model validation
         :return:

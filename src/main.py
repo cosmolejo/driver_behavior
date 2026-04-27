@@ -30,21 +30,23 @@ def main(cfg: DictConfig):
 
     datamodule = DataFactory.get_data(cfg)
 
-    model = SetupFactory.get_model(cfg.setup.mode)()
+
+    model = SetupFactory.get_model(cfg.setup.mode)(cfg)
 
     loss = nn.CrossEntropyLoss()
 
     # define optimizer
-    optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
+    optim_param = cfg.setup.optimizer
+    optimizer = optim.AdamW(model.parameters(), lr=optim_param.learning_rate, betas= (optim_param.beta1, optim_param.beta2), weight_decay=optim_param.weight_decay)
 
     trainer_class = TrainerFactory.get_trainer(cfg.setup.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)
 
-    match cfg.setup.setep:
+    match cfg.setup.step:
         case 'train':
             trainer.run()
         case 'test':
-            trainer.validate()
+            trainer.test()
         case 'predict':
             raise NotImplementedError
     trainer.finalize()

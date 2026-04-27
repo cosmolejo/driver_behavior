@@ -20,7 +20,6 @@ class DMD(Dataset):
 
         self.config = config
         self.window_size = config.window_size
-        self.model_type = config.model_type
         self.dataset = config.data_path
         self.stride = config.stride
         self.camera = config.camera
@@ -68,8 +67,8 @@ class DMD(Dataset):
 
     def __getitem__(self, index: int):
 
-        if self.config.setup == "multy_camera":
-            return self.get_one(index, 'face'), self.get_one(index, 'body')
+        if self.config.setup.mode == "multicamera":
+            return self.get_one(index, 'face')[0], self.get_one(index, 'body')
         else:
             return self.get_one(index)
 

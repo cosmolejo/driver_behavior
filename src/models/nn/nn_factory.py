@@ -5,6 +5,7 @@
 from typing import Callable
 
 from .multy_cam_classifier import MultiCamModel
+from .softmax_fusion import SoftmaxModel
 from ..nn.mobileNet import mobilenet_v3_small_local, mobilenet_v3_large_local
 from torch.nn import LSTM
 from .classifier_model import ClassifierModel
@@ -16,7 +17,9 @@ class ModelFactory:
         'LSTM': LSTM,
         'classifier': ClassifierModel,
         'static_classifier': StaticClassifierModel,
-        'multy_cam_classifier': MultiCamModel
+        'multy_cam_classifier': MultiCamModel,
+        'softmax_classifier': SoftmaxModel
+
 
     }
 
