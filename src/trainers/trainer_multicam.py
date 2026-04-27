@@ -1,3 +1,6 @@
+"""
+Mnist Main agent, as mentioned in the tutorial
+"""
 import mlflow
 import torch
 from tqdm import tqdm
@@ -11,12 +14,11 @@ cudnn.benchmark = True
 import logging
 
 
-class SafeDrivingTrainer(BaseTrainer):
+class MultiCamTrainer(BaseTrainer):
 
     def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None) -> None:
         self.config = config
         self.logger = logging.getLogger(self.config.setup.trainer)
-
 
         # define models
         self.model = model
@@ -29,7 +31,9 @@ class SafeDrivingTrainer(BaseTrainer):
         # define data_loader
         self.train_loader = self.data_module.train_dataloader()
         self.test_loader = self.data_module.test_dataloader()
-        self.val_loader = self.data_module.val_dataloader()
+
+
+
 
 
         # define loss
@@ -70,9 +74,6 @@ class SafeDrivingTrainer(BaseTrainer):
         # Summary Writer
         self.writer = SummaryWriter()
 
-
-
-
     def load_checkpoint(self, file_name) -> None:
         """
         Latest checkpoint loader
@@ -80,13 +81,12 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('pretrained_weights/'+file_name)
-            self.current_epoch =  checkpoint['epoch']
+            checkpoint = torch.load('pretrained_weights/' + file_name)
+            self.current_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer = checkpoint['optimizer']
         except FileNotFoundError:
             self.logger.info("Checkpoint file not found. Starting from scratch")
-
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
         """
@@ -102,9 +102,7 @@ class SafeDrivingTrainer(BaseTrainer):
             'optimizer': self.optimizer,
 
         }
-        torch.save(checkpoint, 'pretrained_weights/'+ file_name)
-
-
+        torch.save(checkpoint, 'pretrained_weights/' + file_name)
     def run(self):
         """
         The main operator
@@ -115,30 +113,30 @@ class SafeDrivingTrainer(BaseTrainer):
 
         except KeyboardInterrupt:
             self.logger.info("You have entered CTRL+C.. Wait to finalize")
-            self.finalize()
 
     def train(self):
         """
         Main training loop
         :return:
         """
-        for epoch in range(self.current_epoch, self.config.max_epoch + 1):
+        for epoch in range(1, self.config.max_epoch + 1):
             total_loss = 0
             with mlflow.start_run():
                 mlflow.log_param("Config", self.config)
                 self.model.train()
-                for batch_idx, (data, target) in enumerate(self.train_loader):
-                    data, target = data.to(self.device), target.to(self.device)
+                for batch_idx, (data_face,data_body, target) in enumerate(self.train_loader):
+                    data_face, data_body,target_face = data_face.to(self.device),data_body.to(self.device), target_face.to(self.device)
+
 
                     self.optimizer.zero_grad()
-                    output = self.model(data)
+                    output = self.model(data_face,data_body)
                     loss = self.loss(output, target)
                     self.writer.add_scalar("Loss/train_batch", loss, batch_idx)
 
                     loss.backward()
                     self.optimizer.step()
 
-                    total_loss += loss.item()* data.size(0)
+                    total_loss += loss.item()
 
                     if batch_idx % self.config.log_interval == 0:
                         self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -153,7 +151,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.test()
-            self.save_checkpoint(self.config.checkpoint_file)
+            self.save_checkpoint(file_name=self.config.checkpoint_file)
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
@@ -180,7 +178,7 @@ class SafeDrivingTrainer(BaseTrainer):
                 for data, target in tqdm(self.test_loader):
                     data, target = data.to(self.device), target.to(self.device)
                     output = self.model(data)
-                    test_loss += self.loss(output, target ).item()* data.size(0)  # sum up batch loss
+                    test_loss += self.loss(output, target ).item()  # sum up batch loss
                     pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                     correct += pred.eq(target.view_as(pred)).sum().item()
 
@@ -202,47 +200,10 @@ class SafeDrivingTrainer(BaseTrainer):
             f'Accuracy: {correct}/{len(self.test_loader.dataset)} ({accuracy:.0f}%), '
             f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}\n'
         )
-
-    def validate(self):
-        """
-        One cycle of model validation
-        :return:
-        """
-        self.model.eval()
-        test_loss = 0
-        correct = 0
-        all_preds = []
-        all_targets = []
-        with torch.no_grad():
-            i = 0
-            for data, target in tqdm(self.val_loader):
-                data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data)
-                test_loss += self.loss(output, target).item() * data.size(0)  # sum up batch loss
-                pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-                correct += pred.eq(target.view_as(pred)).sum().item()
-
-                all_preds.extend(pred.view(-1).cpu().numpy())
-                all_targets.extend(target.view(-1).cpu().numpy())
-
-        test_loss /= len(self.val_loader.dataset)
-        accuracy = 100. * correct / len(self.val_loader.dataset)
-        precision = precision_score(all_targets, all_preds, average='macro', zero_division=0)
-        recall = recall_score(all_targets, all_preds, average='macro', zero_division=0)
-        f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
-        self.writer.add_scalar("Loss/test", test_loss, self.current_epoch)
-        self.writer.add_scalar("Metrics/Accuracy", accuracy, self.current_epoch)
-        self.writer.add_scalar("Metrics/Precision", precision, self.current_epoch)
-        self.writer.add_scalar("Metrics/Recall", recall, self.current_epoch)
-        self.writer.add_scalar("Metrics/F1-Score", f1, self.current_epoch)
-        self.logger.info(
-            f'\nTest set: Average loss: {test_loss:.4f}, '
-            f'Accuracy: {correct}/{len(self.val_loader.dataset)} ({accuracy:.0f}%), '
-            f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}\n'
-        )
     def finalize(self):
         """
         Finalizes all the operations of the 2 Main classes of the process, the operator and the data loader
         :return:
         """
         self.writer.close()
+

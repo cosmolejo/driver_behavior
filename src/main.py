@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 from torch import nn
 from data.data_factory import DataFactory
 from trainers.trainer_factory import TrainerFactory
-from models.nn.nn_factory import ModelFactory
+from models.setup_factory import SetupFactory
 
 import mlflow
 
@@ -27,39 +27,28 @@ def main(cfg: DictConfig):
     mlflow.set_tracking_uri('file://' + hydra.core.hydra_config.HydraConfig.get().runtime.output_dir + '/mlruns')
     mlflow.set_experiment(cfg.exp_name)
 
-    # Create the Agent and pass all the configuration to it then run it.
-
 
     datamodule = DataFactory.get_data(cfg)
 
 
-    backbone_class = ModelFactory.get_model(cfg.backbone_model)
-    backbone = backbone_class()
-
-    temporal_class = ModelFactory.get_model(cfg.temporal_model.model)
-    input_size = backbone.output_channels if cfg.temporal_model.input_size == 'default' else cfg.temporal_model.input_size
-    hidden_size = backbone.output_channels if cfg.temporal_model.hidden_size == 'default' else cfg.temporal_model.hidden_size
-    temporal = temporal_class(
-        input_size = input_size,
-        hidden_size = hidden_size,
-        num_layers = cfg.temporal_model.num_layers,
-        batch_first = cfg.temporal_model.batch_first,
-        bidirectional = cfg.temporal_model.bidirectional
-    )
-
-    model = ModelFactory.get_model(cfg.model.name)(
-        backbone, temporal, input_size, cfg.model.num_classes)
-
+    model = SetupFactory.get_model(cfg.setup.mode)(cfg)
 
     loss = nn.CrossEntropyLoss()
 
     # define optimizer
-    optimizer = optim.SGD(model.parameters(), lr=cfg.learning_rate, momentum=cfg.momentum, weight_decay=cfg.weight_decay)
+    optim_param = cfg.setup.optimizer
+    optimizer = optim.AdamW(model.parameters(), lr=optim_param.learning_rate, betas= (optim_param.beta1, optim_param.beta2), weight_decay=optim_param.weight_decay)
 
-    trainer_class = TrainerFactory.get_trainer(cfg.trainer)
+    trainer_class = TrainerFactory.get_trainer(cfg.setup.trainer)
     trainer = trainer_class(cfg, datamodule, model, loss, optimizer)
 
-    trainer.run()
+    match cfg.setup.step:
+        case 'train':
+            trainer.run()
+        case 'test':
+            trainer.test()
+        case 'predict':
+            raise NotImplementedError
     trainer.finalize()
 
 

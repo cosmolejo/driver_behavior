@@ -20,7 +20,6 @@ class DMD(Dataset):
 
         self.config = config
         self.window_size = config.window_size
-        self.model_type = config.model_type
         self.dataset = config.data_path
         self.stride = config.stride
         self.camera = config.camera
@@ -43,11 +42,11 @@ class DMD(Dataset):
 
             delta = f_end - f_start
 
-            if self.config.model_type == "static":
+            if self.config.model.type == "static":
                 self.samples.append({'file_id': file_id, 'frame_start': 0, 'frame_end': self.window_size})
                 raw_labels.append(label)
 
-            elif self.config.model_type == "temporal":
+            elif self.config.model.type == "temporal":
 
                 # Si la actividad es más corta que window_size, retrocedemos el inicio para asegurar el tamaño
                 if delta < self.window_size:
@@ -68,9 +67,22 @@ class DMD(Dataset):
 
     def __getitem__(self, index: int):
 
+        if self.config.setup.mode == "multicamera":
+            return self.get_one(index, 'face')[0], self.get_one(index, 'body')
+        else:
+            return self.get_one(index)
 
+
+    def __len__(self):
+        return len(self.samples)
+
+    def get_one(self, index: int, camera = None):
         while True:
             sample = self.samples[index]
+            if camera is not None:
+                file_path = str(sample['file_id']).split('_')
+                file_path[-2] = camera
+                sample['file_id'] = '_'.join(file_path)
             video = slice_frame(self.dataset, sample)
 
             # Verificamos si logramos extraer exactamente la cantidad requerida de frames reales
@@ -91,6 +103,3 @@ class DMD(Dataset):
         label = self.y[index]
 
         return source_video, label
-
-    def __len__(self):
-        return len(self.samples)
