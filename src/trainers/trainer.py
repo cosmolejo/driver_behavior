@@ -17,6 +17,9 @@ class SafeDrivingTrainer(BaseTrainer):
         self.config = config
         self.logger = logging.getLogger(self.config.setup.trainer)
 
+        self.test_loss = None
+        self.best_loss = None
+
 
         # define models
         self.model = model
@@ -68,7 +71,7 @@ class SafeDrivingTrainer(BaseTrainer):
         # Model Loading from the latest checkpoint if not found start from scratch.
         self.load_checkpoint(self.config.checkpoint_file)
         # Summary Writer
-        self.writer = SummaryWriter()
+        self.writer = SummaryWriter(log_dir=self.config.hydra.run.dir)
 
 
 
@@ -80,7 +83,7 @@ class SafeDrivingTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('pretrained_weights/'+file_name)
+            checkpoint = torch.load('pretrained_weights/'+file_name+'.pth.tar')
             self.current_epoch =  checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer = checkpoint['optimizer']
@@ -102,7 +105,9 @@ class SafeDrivingTrainer(BaseTrainer):
             'optimizer': self.optimizer,
 
         }
-        torch.save(checkpoint, 'pretrained_weights/'+ file_name)
+        if is_best:
+            torch.save(checkpoint, 'pretrained_weights/' + file_name+'.best.pth.tar')
+        torch.save(checkpoint, 'pretrained_weights/' + file_name + '.pth.tar')
 
 
     def run(self):
@@ -122,10 +127,12 @@ class SafeDrivingTrainer(BaseTrainer):
         Main training loop
         :return:
         """
-        for epoch in range(self.current_epoch, self.config.max_epoch + 1):
-            total_loss = 0
-            with mlflow.start_run():
-                mlflow.log_param("Config", self.config)
+        with mlflow.start_run():
+            mlflow.log_param("Config", self.config)
+            for epoch in range(self.current_epoch, self.config.max_epoch + 1):
+                total_loss = 0
+
+
                 self.model.train()
                 for batch_idx, (data, target) in enumerate(self.train_loader):
                     data, target = data.to(self.device), target.to(self.device)
@@ -153,7 +160,11 @@ class SafeDrivingTrainer(BaseTrainer):
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.test()
-            self.save_checkpoint(self.config.checkpoint_file)
+            if self.test_loss < self.best_loss or self.best_loss is None:
+                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
+                self.best_loss = self.test_loss
+            else:
+                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
@@ -188,6 +199,7 @@ class SafeDrivingTrainer(BaseTrainer):
                     all_targets.extend(target.view(-1).cpu().numpy())
 
         test_loss /= len(self.test_loader.dataset)
+        self.test_loss = test_loss
         accuracy = 100. * correct / len(self.test_loader.dataset)
         precision = precision_score(all_targets, all_preds, average='macro', zero_division=0)
         recall = recall_score(all_targets, all_preds, average='macro', zero_division=0)

@@ -17,6 +17,11 @@ import logging
 class MultiCamTrainer(BaseTrainer):
 
     def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None) -> None:
+
+
+        self.test_loss = None
+        self.best_loss = None
+
         self.config = config
         self.logger = logging.getLogger(self.config.setup.trainer)
 
@@ -72,7 +77,7 @@ class MultiCamTrainer(BaseTrainer):
         # Model Loading from the latest checkpoint if not found start from scratch.
         self.load_checkpoint(self.config.checkpoint_file)
         # Summary Writer
-        self.writer = SummaryWriter()
+        self.writer = SummaryWriter(log_dir=self.config.hydra.run.dir)
 
     def load_checkpoint(self, file_name) -> None:
         """
@@ -81,7 +86,7 @@ class MultiCamTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('pretrained_weights/' + file_name)
+            checkpoint = torch.load('pretrained_weights/' + file_name+'.pth.tar')
             self.current_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer = checkpoint['optimizer']
@@ -102,7 +107,9 @@ class MultiCamTrainer(BaseTrainer):
             'optimizer': self.optimizer,
 
         }
-        torch.save(checkpoint, 'pretrained_weights/' + file_name)
+        if is_best:
+            torch.save(checkpoint, 'pretrained_weights/' + file_name+'.best.pth.tar')
+        torch.save(checkpoint, 'pretrained_weights/' + file_name + '.pth.tar')
     def run(self):
         """
         The main operator
@@ -119,10 +126,11 @@ class MultiCamTrainer(BaseTrainer):
         Main training loop
         :return:
         """
-        for epoch in range(1, self.config.max_epoch + 1):
-            total_loss = 0
-            with mlflow.start_run():
-                mlflow.log_param("Config", self.config)
+        with mlflow.start_run():
+            mlflow.log_param("Config", self.config)
+            for epoch in range(self.current_epoch, self.config.max_epoch + 1):
+                total_loss = 0
+
                 self.model.train()
                 for batch_idx, (data_face,data_body, target) in enumerate(self.train_loader):
                     data_face, data_body,target_face = data_face.to(self.device),data_body.to(self.device), target_face.to(self.device)
@@ -136,11 +144,11 @@ class MultiCamTrainer(BaseTrainer):
                     loss.backward()
                     self.optimizer.step()
 
-                    total_loss += loss.item()
+                    total_loss += loss.item()* data_face.size(0)
 
                     if batch_idx % self.config.log_interval == 0:
                         self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                            self.current_epoch, batch_idx * len(data_face), len(self.train_loader.dataset),
                                                 100. * batch_idx / len(self.train_loader), loss.item()))
 
 
@@ -151,7 +159,11 @@ class MultiCamTrainer(BaseTrainer):
             self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
             self.writer.add_scalar("Total_Loss/train", loss, epoch)
             self.test()
-            self.save_checkpoint(file_name=self.config.checkpoint_file)
+            if self.test_loss < self.best_loss or self.best_loss is None:
+                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
+                self.best_loss = self.test_loss
+            else:
+                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
 
             self.current_epoch += 1
     def train_one_epoch(self,epoch):
@@ -175,10 +187,10 @@ class MultiCamTrainer(BaseTrainer):
         all_targets = []
         with torch.no_grad():
                 i = 0
-                for data, target in tqdm(self.test_loader):
-                    data, target = data.to(self.device), target.to(self.device)
-                    output = self.model(data)
-                    test_loss += self.loss(output, target ).item()  # sum up batch loss
+                for data_face,data_body, target, target in tqdm(self.test_loader):
+                    data_face, data_body,target_face = data_face.to(self.device),data_body.to(self.device), target_face.to(self.device)
+                    output = self.model(data_face,data_body)
+                    test_loss += self.loss(output, target ).item()* data_face.size(0)  # sum up batch loss
                     pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                     correct += pred.eq(target.view_as(pred)).sum().item()
 
@@ -190,6 +202,7 @@ class MultiCamTrainer(BaseTrainer):
         precision = precision_score(all_targets, all_preds, average='macro', zero_division=0)
         recall = recall_score(all_targets, all_preds, average='macro', zero_division=0)
         f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+        self.test_loss = test_loss
         self.writer.add_scalar("Loss/test", test_loss, self.current_epoch)
         self.writer.add_scalar("Metrics/Accuracy", accuracy, self.current_epoch)
         self.writer.add_scalar("Metrics/Precision", precision, self.current_epoch)
