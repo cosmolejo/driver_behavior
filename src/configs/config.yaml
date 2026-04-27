@@ -31,7 +31,7 @@ seed: 306638
 backbone_model: mobilenet_v3_small
 
 setup:
-  mode: multicamera
+  mode: body
   step: train
   trainer: safe_driving
   optimizer:
@@ -67,8 +67,8 @@ log_interval: 10
 
 validate_every: 2
 
-checkpoint_file: checkpoint_face
-camera: face
+checkpoint_file: checkpoint_body
+camera: body
 
 data_module: dmd
 num_workers: 2
@@ -76,7 +76,7 @@ pin_memory: true
 async_loading: true
 
 data_mode: train_test_val
-#data_path: /home/agomez/Documents/Vicomtech/
-data_path: /mnt/c/Users/alejandro.gomez/Documents/Vicomtech/
-#label_path: /home/agomez/Documents/driver_behavior/datasets/
-label_path: /mnt/c/Users/alejandro.gomez/Documents/driver_behavior/datasets/
+data_path: /home/agomez/Documents/Vicomtech/
+# data_path: /mnt/c/Users/alejandro.gomez/Documents/Vicomtech/
+label_path: /home/agomez/Documents/driver_behavior/datasets/
+# label_path: /mnt/c/Users/alejandro.gomez/Documents/driver_behavior/datasets/

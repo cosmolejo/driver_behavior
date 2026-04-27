@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.misc import print_cuda_statistics
 from .base import BaseTrainer
 from sklearn.metrics import precision_score, recall_score, f1_score
+import hydra
 cudnn.benchmark = True
 
 import logging
@@ -71,7 +72,7 @@ class SafeDrivingTrainer(BaseTrainer):
         # Model Loading from the latest checkpoint if not found start from scratch.
         self.load_checkpoint(self.config.checkpoint_file)
         # Summary Writer
-        self.writer = SummaryWriter(log_dir=self.config.hydra.run.dir)
+        self.writer = SummaryWriter(log_dir=hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
 
 
 
