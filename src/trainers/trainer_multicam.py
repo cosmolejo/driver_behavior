@@ -87,7 +87,7 @@ class MultiCamTrainer(BaseTrainer):
         :return:
         """
         try:
-            checkpoint = torch.load('pretrained_weights/' + file_name+'.pth.tar')
+            checkpoint = torch.load('pretrained_weights/' + file_name+'.pth.tar', weights_only=False)
             self.current_epoch = checkpoint['epoch']
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer = checkpoint['optimizer']
