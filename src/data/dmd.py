@@ -62,8 +62,8 @@ class DMD(Dataset):
                         raw_labels.append(label)
 
         # Codificar las etiquetas resultantes
-        le = LabelEncoder()
-        self.y = le.fit_transform(raw_labels)
+        self.le = LabelEncoder()
+        self.y = self.le.fit_transform(raw_labels)
 
     def __getitem__(self, index: int):
 

@@ -41,6 +41,7 @@ setup:
     beta1: 0.5
     beta2: 0.999
 
+
 temporal_model:
   model: LSTM
   input_size: default
@@ -60,7 +61,7 @@ stride: 1
 
 batch_size: 8
 test_batch_size: 16
-
+early_stopping_delta: 0.0001
 max_epoch: 25
 
 log_interval: 10

@@ -131,49 +131,49 @@ class SafeDrivingTrainer(BaseTrainer):
         with mlflow.start_run():
             mlflow.log_param("Config", self.config)
             for epoch in range(self.current_epoch, self.config.max_epoch + 1):
-                total_loss = 0
-
-
-                self.model.train()
-                for batch_idx, (data, target) in enumerate(self.train_loader):
-                    data, target = data.to(self.device), target.to(self.device)
-
-                    self.optimizer.zero_grad()
-                    output = self.model(data)
-                    loss = self.loss(output, target)
-                    self.writer.add_scalar("Loss/train_batch", loss, batch_idx)
-
-                    loss.backward()
-                    self.optimizer.step()
-
-                    total_loss += loss.item()* data.size(0)
-
-                    if batch_idx % self.config.log_interval == 0:
-                        self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
-                                                100. * batch_idx / len(self.train_loader), loss.item()))
-
-
-
-                    mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
-                    self.current_iteration += 1
-            avg_epoch_loss = total_loss / len(self.train_loader)
-            self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
-            self.writer.add_scalar("Total_Loss/train", loss, epoch)
-            self.test()
-            if self.test_loss < self.best_loss or self.best_loss is None:
-                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
-                self.best_loss = self.test_loss
-            else:
-                self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
-
-            self.current_epoch += 1
+                self.train_one_epoch(epoch)
+                previous_loss = self.test_loss
+                self.test()
+                if self.test_loss < self.best_loss or self.best_loss is None:
+                    self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
+                    self.best_loss = self.test_loss
+                else:
+                    self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
+                if previous_loss is not None and previous_loss - self.test_loss < self.config.early_stopping_delta:
+                    self.logger.info(f"Early stopping!! Delta: {previous_loss - self.test_loss}")
+                    break
+                self.current_epoch += 1
     def train_one_epoch(self,epoch):
         """
         One epoch of training
         :return:
         """
-        pass
+        total_loss = 0
+
+        self.model.train()
+        for batch_idx, (data, target) in enumerate(self.train_loader):
+            data, target = data.to(self.device), target.to(self.device)
+
+            self.optimizer.zero_grad()
+            output = self.model(data)
+            loss = self.loss(output, target)
+            self.writer.add_scalar("Loss/train_batch", loss, batch_idx)
+
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += loss.item() * data.size(0)
+
+            if batch_idx % self.config.log_interval == 0:
+                self.logger.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    self.current_epoch, batch_idx * len(data), len(self.train_loader.dataset),
+                                        100. * batch_idx / len(self.train_loader), loss.item()))
+
+            mlflow.log_metric("loss", loss.item(), step=self.current_iteration)
+            self.current_iteration += 1
+        avg_epoch_loss = total_loss / len(self.train_loader)
+        self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
+        self.writer.add_scalar("Total_Loss/train", loss, epoch)
 
 
 
