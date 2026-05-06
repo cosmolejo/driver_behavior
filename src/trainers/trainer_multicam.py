@@ -20,8 +20,8 @@ class MultiCamTrainer(BaseTrainer):
     def __init__(self, config, data_module=None, model=None, loss=None, optimizer=None) -> None:
 
 
-        self.test_loss = None
-        self.best_loss = None
+        self.test_loss = 100000
+        self.best_loss = 100000
 
         self.config = config
         self.logger = logging.getLogger(self.config.setup.trainer)
@@ -134,12 +134,12 @@ class MultiCamTrainer(BaseTrainer):
                 self.train_one_epoch(epoch)
                 previous_loss = self.test_loss
                 self.test()
-                if self.test_loss < self.best_loss or self.best_loss is None:
+                if self.test_loss < self.best_loss:
                     self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
                     self.best_loss = self.test_loss
                 else:
                     self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
-                if previous_loss is not None and previous_loss - self.test_loss < self.config.early_stopping_delta:
+                if previous_loss is not None and abs(previous_loss - self.test_loss) < self.config.early_stopping_delta:
                     self.logger.info(f"Early stopping!! Delta: {previous_loss - self.test_loss}")
                     break
                 self.current_epoch += 1

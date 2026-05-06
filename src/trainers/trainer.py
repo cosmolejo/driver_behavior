@@ -18,8 +18,8 @@ class SafeDrivingTrainer(BaseTrainer):
         self.config = config
         self.logger = logging.getLogger(self.config.setup.trainer)
 
-        self.test_loss = None
-        self.best_loss = None
+        self.test_loss = 100000
+        self.best_loss = 100000
 
 
         # define models
@@ -134,15 +134,16 @@ class SafeDrivingTrainer(BaseTrainer):
                 self.train_one_epoch(epoch)
                 previous_loss = self.test_loss
                 self.test()
-                if self.test_loss < self.best_loss or self.best_loss is None:
+                if self.test_loss < self.best_loss:
                     self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
                     self.best_loss = self.test_loss
                 else:
                     self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=0)
-                if previous_loss is not None and previous_loss - self.test_loss < self.config.early_stopping_delta:
+                if previous_loss is not None and abs(previous_loss - self.test_loss) < self.config.early_stopping_delta:
                     self.logger.info(f"Early stopping!! Delta: {previous_loss - self.test_loss}")
                     break
                 self.current_epoch += 1
+
     def train_one_epoch(self,epoch):
         """
         One epoch of training
@@ -173,7 +174,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.current_iteration += 1
         avg_epoch_loss = total_loss / len(self.train_loader)
         self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
-        self.writer.add_scalar("Total_Loss/train", loss, epoch)
+        self.writer.add_scalar("Total_Loss/train", total_loss, epoch)
 
 
 
