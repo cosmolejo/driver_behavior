@@ -32,6 +32,9 @@ class Predictor:
             self.device = torch.device("cuda")
             torch.cuda.set_device(self.cfg.gpu_device)
             self.model = self.model.to(self.device)
+        else:
+            self.device = torch.device("cpu")
+            self.model = self.model.to(self.device)
 
     def preprocess(self, raw_data):
         """
@@ -77,6 +80,7 @@ class Predictor:
         pred = torch.argmax(output, dim=1)
         pred_numpy = pred.cpu().numpy()
         return self.le.inverse_transform(pred_numpy)
+
     def load_weights(self, file_name) -> None:
         """
         Latest checkpoint loader
@@ -84,7 +88,7 @@ class Predictor:
         :return:
         """
 
-        checkpoint = torch.load('pretrained_weights/' + file_name + '.pth.tar')
+        checkpoint = torch.load('pretrained_weights/' + file_name + '.pth.tar', map_location=torch.device('cpu'))
         self.model.load_state_dict(checkpoint['model_state_dict'])
 
 # 2. PUNTO DE ENTRADA (Main)
