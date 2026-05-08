@@ -71,6 +71,7 @@ class Predictor:
         input_tensor = self.preprocess(raw_data_package)
         input_tensor = input_tensor.unsqueeze(0)
         input_tensor = input_tensor.to(self.device)
+        print(input_tensor.shape)
         with torch.no_grad():
             output = self.model(input_tensor)
 

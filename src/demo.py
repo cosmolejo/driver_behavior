@@ -8,7 +8,9 @@ from models.setup_factory import SetupFactory
 from predictors.base_predictor import Predictor
 from tqdm import tqdm
 import time
-
+import torch
+from executorch.runtime import Runtime
+from typing import List
 
 def get_label_encoder(cfg):
     full_dataset = DMD(cfg)
@@ -80,7 +82,29 @@ def run_latency_test(cap,num_samples, predictor):
 
     return elapsed_time_avg
 
-            
+
+def executor_latency_test(cap, num_samples):
+    runtime = Runtime.get()
+
+    input_tensor: torch.Tensor = torch.randn(1, 16, 3, 224, 224)
+    program = runtime.load_program("../models/model.pte")
+    method = program.load_method("forward")
+
+
+
+    start_time = time.time()
+    with tqdm(total=num_samples) as pbar:
+        for _ in range(num_samples):
+            output: List[torch.Tensor] = method.execute([input_tensor])
+            pbar.update(1)
+    end_time = time.time()
+
+    elapsed_time = end_time - start_time
+    elapsed_time_avg = elapsed_time / num_samples
+
+    return elapsed_time_avg
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config_demo")
 def main(cfg: DictConfig):
 
@@ -99,6 +123,9 @@ def main(cfg: DictConfig):
             run_video(cap,fps,ancho,alto, predictor)
         case "latency":
             avg_lat = run_latency_test(cap,500, predictor)
+            print(f'average latency: {avg_lat}')
+        case "executor_latency":
+            avg_lat = executor_latency_test(cap, 500)
             print(f'average latency: {avg_lat}')
 
     cap.release()
