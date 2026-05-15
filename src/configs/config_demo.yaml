@@ -27,7 +27,7 @@ gpu_device: 0
 seed: 306638
 
 demo:
-  mode: latency
+  mode: video
   video: gC_14_s1_2019-03-04T11_56_20+01_00_rgb_face_240.mp4
 
 backbone_model: mobilenet_v3_small
@@ -78,7 +78,8 @@ pin_memory: true
 async_loading: true
 
 data_mode: train_test_val
-data_path: /home/skychqzgl/Documents/demo_vids
+data_path: /home/antares/Tesis_Data/Vicomtech/dmd/gC/14/s1/
+#  /home/skychqzgl/Documents/demo_vids
 #/home/agomez/Documents/Vicomtech/
 #/mnt/c/Users/alejandro.gomez/Documents/Vicomtech/
 label_path: /home/antares/driver_behavior/datasets/

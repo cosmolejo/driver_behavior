@@ -27,6 +27,7 @@ def run_video(cap,fps,ancho, alto, predictor):
     out = cv.VideoWriter(ruta_salida, fourcc, fps, (ancho, alto))
 
     frame_buffer = []
+    # Processes video frames with buffered prediction; overlays labels and writes output
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
@@ -120,6 +121,7 @@ def main(cfg: DictConfig):
 
     match cfg.demo.mode:
         case "video":
+            print("Running video demo")
             run_video(cap,fps,ancho,alto, predictor)
         case "latency":
             avg_lat = run_latency_test(cap,500, predictor)
@@ -127,6 +129,8 @@ def main(cfg: DictConfig):
         case "executor_latency":
             avg_lat = executor_latency_test(cap, 500)
             print(f'average latency: {avg_lat}')
+        case _:
+            print("Mode not supported")
 
     cap.release()
 

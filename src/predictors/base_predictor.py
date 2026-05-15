@@ -6,6 +6,7 @@ import joblib
 import torch.nn.functional as F
 import torch
 import numpy as np
+import cv2
 from PIL import Image
 from torchvision import transforms
 
@@ -57,12 +58,13 @@ class Predictor:
         #     align_corners=False,
         #     antialias=True
         # )
-        tensors = [transforms.ToTensor()(
-            Image.fromarray(np.uint8(frame * 255)).resize((224, 224))
-        ) for frame in raw_data]
 
-        tensors = torch.stack(tensors)
-        return tensors
+        frames_np = np.stack([
+            cv2.resize(f, (224, 224))
+            for f in raw_data
+        ])  # (T, 224, 224, 3) uint8
+        source_video = torch.from_numpy(frames_np).permute(0, 3, 1, 2).float().div_(255.0)
+        return source_video
 
     def predict(self, raw_data_package):
         """
@@ -71,7 +73,6 @@ class Predictor:
         input_tensor = self.preprocess(raw_data_package)
         input_tensor = input_tensor.unsqueeze(0)
         input_tensor = input_tensor.to(self.device)
-        print(input_tensor.shape)
         with torch.no_grad():
             output = self.model(input_tensor)
 
