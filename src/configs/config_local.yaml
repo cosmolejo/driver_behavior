@@ -76,7 +76,8 @@ pin_memory: true
 async_loading: true
 
 data_mode: train_test_val
-data_path: /home/antares/Tesis_Data/Vicomtech/
+data_path: /home/antares/Tesis_Data/dmd_frames/   # NO Vicomtech/; apuntar a los JPEG
+frames_are_rgb: false
 #/home/agomez/Documents/Vicomtech/
 #/mnt/c/Users/alejandro.gomez/Documents/Vicomtech/
 label_path: /home/antares/driver_behavior/datasets/
