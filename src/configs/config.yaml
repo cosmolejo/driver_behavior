@@ -52,7 +52,7 @@ temporal_model:
 
 model:
   name: classifier
-  num_classes: 4
+  num_classes: 3
   type: temporal
 
 window_size: 15
@@ -75,7 +75,7 @@ data_module: dmd
 num_workers: 2
 pin_memory: true
 async_loading: true
-
+frames_are_rgb: false
 data_mode: train_test_val
 data_path: /home/agomez/Documents/Vicomtech/
 # data_path: /mnt/c/Users/alejandro.gomez/Documents/Vicomtech/

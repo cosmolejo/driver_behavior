@@ -6,8 +6,8 @@ hydra:
     dir: experiments/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
   sweep:
-    dir: experiments/${now:%Y-%m-%d_%H-%M-%S}
-    subdir: ${hydra.job.num}=
+    dir: experiments=/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
 
   #sweeper:
 #
@@ -31,7 +31,7 @@ seed: 306638
 backbone_model: mobilenet_v3_small
 
 setup:
-  mode: face
+  mode: body
   step: train
   trainer: safe_driving
   optimizer:
@@ -40,6 +40,7 @@ setup:
     weight_decay: 0
     beta1: 0.5
     beta2: 0.999
+
 
 temporal_model:
   model: LSTM
@@ -51,16 +52,16 @@ temporal_model:
 
 model:
   name: classifier
-  num_classes: 4
+  num_classes: 3
   type: temporal
 
 window_size: 15
 stride: 1
 
 
-batch_size: 8
-test_batch_size: 32
-
+batch_size: 16
+test_batch_size: 64
+early_stopping_delta: 0.0001
 max_epoch: 25
 
 log_interval: 10
@@ -71,7 +72,7 @@ checkpoint_file: checkpoint_face
 camera: face
 
 data_module: dmd
-num_workers: 4
+num_workers: 2
 pin_memory: true
 async_loading: true
 

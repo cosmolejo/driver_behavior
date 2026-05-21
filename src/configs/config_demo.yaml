@@ -76,7 +76,7 @@ data_module: dmd
 num_workers: 4
 pin_memory: true
 async_loading: true
-
+frames_are_rgb: false
 data_mode: train_test_val
 data_path: /home/antares/Tesis_Data/Vicomtech/dmd/gC/14/s1/
 #  /home/skychqzgl/Documents/demo_vids
