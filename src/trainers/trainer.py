@@ -75,6 +75,7 @@ class SafeDrivingTrainer(BaseTrainer):
 
         self.test_loss = 100000
         self.best_loss = 100000
+        self.train_loss = None
 
         self.model = model
         self.data_module = data_module
@@ -169,7 +170,7 @@ class SafeDrivingTrainer(BaseTrainer):
             for epoch in range(self.current_epoch, self.config.max_epoch + 1):
                 self.train_one_epoch(epoch)
                 previous_loss = self.test_loss
-                self.test()
+                self.test(epoch)
                 if self.test_loss < self.best_loss:
                     self.save_checkpoint(file_name=self.config.checkpoint_file, is_best=1)
                     self.best_loss = self.test_loss
@@ -205,6 +206,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.current_iteration += 1
 
         avg_epoch_loss = total_loss / len(self.train_loader.dataset)
+        self.train_loss = avg_epoch_loss
         self.writer.add_scalar("Loss/train_epoch", avg_epoch_loss, epoch)
         self.writer.add_scalar("Total_Loss/train", total_loss, epoch)
 
@@ -303,10 +305,19 @@ class SafeDrivingTrainer(BaseTrainer):
         self.logger.info(f"\nClassification report ({split_name}):\n{report}")
         self.logger.info(f"Confusion matrix ({split_name}):\n{cm}\n")
 
-    def test(self):
+    def test(self, epoch=None):
         """Evaluación cíclica usada para selección de checkpoint y early stopping."""
         metrics = self._evaluate(self.test_loader, split_name='test')
         self.test_loss = metrics['loss']
+        if epoch is not None:
+            self.writer.add_scalars(
+                "Experiment_Loss",  # <- mismo plot
+                {
+                    "train": self.train_loss,
+                    "test": self.test_loss,
+                },
+                epoch
+            )
         self._log_evaluation(metrics, split_name='test')
 
     def validate(self):
