@@ -11,8 +11,25 @@ Cambios respecto a la version anterior
         - "train_test_val": crea TRAIN, VALIDATION y TEST
         - "train_test"    : crea TRAIN y TEST (sin VALIDATION)
 """
+import torch
 from torch.utils.data import DataLoader
+import torchvision.transforms.v2 as T2
 
+
+image_normalize = T2.Normalize(mean=[0.485, 0.456, 0.406],
+                               std=[0.229, 0.224, 0.225])
+
+train_transform = T2.Compose([
+    T2.RandomResizedCrop(size=224, scale=(0.8, 1.0), antialias=True),
+    T2.ToDtype(torch.float32, scale=True),  # uint8 [0,255] -> float [0,1]
+    image_normalize,
+])
+
+val_transform = T2.Compose([
+    T2.Resize((224, 224), antialias=True),
+    T2.ToDtype(torch.float32, scale=True),
+    image_normalize,
+])
 
 class DataModule:
     def __init__(self, config, dataset):
@@ -32,12 +49,12 @@ class DataModule:
         mode = self.config.data_mode
 
         if mode == "train_test_val":
-            self.train_ds = self.dataset(self.config, split="TRAIN")
+            self.train_ds = self.dataset(self.config, split="TRAIN", transform=train_transform)
             self.val_ds = self.dataset(self.config, split="VALIDATION")
-            self.test_ds = self.dataset(self.config, split="TEST")
+            self.test_ds = self.dataset(self.config, split="TEST", transform= val_transform)
         elif mode == "train_test":
-            self.train_ds = self.dataset(self.config, split="TRAIN")
-            self.test_ds = self.dataset(self.config, split="TEST")
+            self.train_ds = self.dataset(self.config, split="TRAIN",transform=train_transform)
+            self.test_ds = self.dataset(self.config, split="TEST", transform= val_transform)
         else:
             raise ValueError(
                 "data_mode no soportado: {!r} (usa 'train_test_val' o 'train_test')".format(mode)

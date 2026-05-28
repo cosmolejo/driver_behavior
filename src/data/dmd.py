@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+from torchvision import tv_tensors
 
 
 # Normalizacion estandar de torchvision (ImageNet)
@@ -51,7 +52,7 @@ VALID_SPLITS = {"TRAIN", "VALIDATION", "TEST"}
 
 
 class DMD(Dataset):
-    def __init__(self, config, split):
+    def __init__(self, config, split, transform=None):
         """
         Args:
             config: configuracion (Hydra/OmegaConf o dict-like).
@@ -79,6 +80,7 @@ class DMD(Dataset):
         self.window_size = int(config.window_size)
         self.stride = int(config.stride)
         self.camera = config.camera
+        self.transform = transform
         # Si los JPEG ya estan en RGB, no se hace conversion BGR->RGB.
         self.frames_are_rgb = getattr(config, "frames_are_rgb", False)
 
@@ -228,11 +230,17 @@ class DMD(Dataset):
             if not self.frames_are_rgb:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             frames[i] = img
+            # frames: (T, H, W, C) uint8
+            # -> tensor (T, C, H, W) uint8
+            clip = torch.from_numpy(frames).permute(0, 3, 1, 2).contiguous()
 
-        # (T, H, W, C) uint8 -> (T, C, H, W) float32 [0,1] -> normalizado
-        t = torch.from_numpy(frames).permute(0, 3, 1, 2).contiguous().float().div_(255.0)
-        t = (t - IMAGENET_MEAN) / IMAGENET_STD
-        return t
+            if self.transform:
+                clip = tv_tensors.Video(clip)  # ahora v2 lo reconoce como video
+                t = self.transform(clip)
+            else:
+                t = clip.float().div_(255.0)
+                t = (t - IMAGENET_MEAN) / IMAGENET_STD
+            return t
 
     # ------------------------------------------------------------------ #
     # API Dataset
