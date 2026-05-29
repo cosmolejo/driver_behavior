@@ -1,21 +1,42 @@
 defaults:
   - override hydra/sweeper: optuna
+  - override hydra/launcher: joblib
 
 hydra:
+  # Cada trial corre en su propia carpeta de salida. Asi load_checkpoint() siempre
+  # da FileNotFoundError -> cada trial arranca de cero y guarda su checkpoint
+  # aislado, en vez de heredar pesos/optimizer de un trial anterior via
+  # pretrained_weights/ (que rompia el barrido en silencio).
+  job:
+    chdir: true
+
   run:
     dir: experiments/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
   sweep:
-    dir: experiments=/${now:%Y-%m-%d_%H-%M-%S}
+    dir: experiments/${now:%Y-%m-%d_%H-%M-%S}
     subdir: ${hydra.job.num}
 
-  #sweeper:
-#
-#    direction: "minimize"
-#    study_name: null
-#    storage: "sqlite:///tmp.db"
-#    n_trials: 20
-#    n_jobs: 2
+  # Ejecucion paralela REAL de los trials.
+  # Requiere: pip install hydra-joblib-launcher
+  # Con el launcher por defecto (basic), n_jobs NO paraleliza: corre en secuencia.
+  launcher:
+    n_jobs: 2
+
+  sweeper:
+    sampler:
+      _target_: optuna.samplers.TPESampler
+      seed: ${seed}
+    direction: minimize          # minimizamos el test-loss (best_loss)
+    study_name: ${exp_name}
+    storage: sqlite:///optuna_${exp_name}.db   # persistencia -> permite reanudar el estudio
+    n_trials: 20
+    n_jobs: 2                     # trials muestreados por tanda (= paralelismo con joblib)
+    params:
+      setup.optimizer.learning_rate: tag(log, interval(1e-5, 1e-2))
+      setup.optimizer.weight_decay: tag(log, interval(1e-6, 1e-2))
+      setup.optimizer.beta1: interval(0.5, 0.95)
+      temporal_model.num_layers: int(interval(1, 4))   # entero 1..4 inclusive
 
 
 exp_name: exp_0
@@ -62,7 +83,7 @@ stride: 1
 batch_size: 64
 test_batch_size: 128
 early_stopping_delta: 0.0001
-max_epoch: 100
+max_epoch: 9   # el bucle usa range(0, max_epoch+1) -> 10 epochs reales
 
 log_interval: 10
 
@@ -72,7 +93,7 @@ checkpoint_file: checkpoint_face
 camera: face
 
 data_module: dmd
-num_workers: 2
+num_workers: 1
 pin_memory: true
 async_loading: true
 frames_are_rgb: false

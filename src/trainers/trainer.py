@@ -1,4 +1,5 @@
 import logging
+import os
 
 import hydra
 import mlflow
@@ -148,6 +149,7 @@ class SafeDrivingTrainer(BaseTrainer):
             self.logger.info("Checkpoint file not found. Starting from scratch")
 
     def save_checkpoint(self, file_name="checkpoint.pth.tar", is_best=0):
+        os.makedirs('pretrained_weights', exist_ok=True)
         checkpoint = {
             'epoch': self.current_epoch + 1,
             'model_state_dict': self.model.state_dict(),
@@ -163,10 +165,23 @@ class SafeDrivingTrainer(BaseTrainer):
         except KeyboardInterrupt:
             self.logger.info("You have entered CTRL+C.. Wait to finalize")
             self.finalize()
+        # Objetivo para Optuna: menor test-loss alcanzado. Si el trial diverge
+        # (NaN), best_loss se queda en su valor inicial alto y Optuna lo descarta.
+        return float(self.best_loss)
 
     def train(self):
         with mlflow.start_run():
             mlflow.log_param("Config", self.config)
+            # Hiperparametros muestreados por Optuna en este trial (para comparar runs)
+            opt = self.config.setup.optimizer
+            mlflow.log_params({
+                "learning_rate": opt.learning_rate,
+                "weight_decay": opt.weight_decay,
+                "beta1": opt.beta1,
+                "beta2": opt.beta2,
+                "num_layers": self.config.temporal_model.num_layers,
+                "bidirectional": self.config.temporal_model.bidirectional,
+            })
             for epoch in range(self.current_epoch, self.config.max_epoch + 1):
                 self.train_one_epoch(epoch)
                 previous_loss = self.test_loss
@@ -181,6 +196,14 @@ class SafeDrivingTrainer(BaseTrainer):
                     self.logger.info(f"Early stopping!! Delta: {previous_loss - self.test_loss}")
                     break
                 self.current_epoch += 1
+
+            # Resultado del trial + checkpoint del mejor modelo como artefacto MLflow
+            mlflow.log_metric("best_test_loss", float(self.best_loss))
+            best_ckpt = os.path.join(
+                "pretrained_weights", self.config.checkpoint_file + ".best.pth.tar"
+            )
+            if os.path.exists(best_ckpt):
+                mlflow.log_artifact(best_ckpt, artifact_path="checkpoint")
 
     def train_one_epoch(self, epoch):
         total_loss = 0
