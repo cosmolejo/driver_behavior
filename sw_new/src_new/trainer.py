@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import VideoDataset
 from model import get_model
-
+from loss_factory import LossFactory
 
 def video_collate_fn(batch):
     """
@@ -46,7 +46,8 @@ def train_one_epoch(
     global_step,
     epoch,
     num_epochs,
-    log_every_n_steps=50):
+    log_every_n_steps=50,
+    loss_kwargs=None):
 
     model.train()
     running_loss = 0.0
@@ -66,7 +67,10 @@ def train_one_epoch(
         
         optimizer.zero_grad()
         outputs = model(videos)
-        loss = criterion(outputs, labels)
+        if loss_kwargs:
+            loss = criterion(outputs, labels, **loss_kwargs)
+        else:
+            loss = criterion(outputs, labels)
         loss.backward()
 
         optimizer.step()
@@ -159,6 +163,8 @@ def train_pipeline(
     sample_one_each: int = 1,
     batch_size: int = 4,
     num_epochs: int = 10,
+    loss_fn: str = "CrossEntropyLoss",
+    loss_kwargs: dict = None,
     lr: float = 1e-4,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
 ):
@@ -205,7 +211,14 @@ def train_pipeline(
     ).to(device)
     
     # Loss and optimizer
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    if loss_fn == 'sigmoid_focal_loss':
+        criterion = LossFactory.get_loss(loss_fn)
+    else:
+        if loss_kwargs:
+            criterion = LossFactory.get_loss(loss_fn)(**loss_kwargs)
+        else:
+            criterion = LossFactory.get_loss(loss_fn)()
+    # criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=lr,
@@ -228,8 +241,21 @@ def train_pipeline(
     best_val_acc = 0.0
     global_step = 0
     for epoch in range(num_epochs):
-        global_step = train_one_epoch(model, train_loader, criterion, optimizer, scheduler, device, writer, global_step, epoch, num_epochs, 100)
-        val_loss, val_acc, at_least_one_correct_tot = validate(model, val_loader, criterion, device, epoch, num_epochs)
+        if loss_fn == 'sigmoid_focal_loss':
+            global_step = train_one_epoch(model, train_loader,
+                                          criterion, optimizer,
+                                          scheduler, device, writer,
+                                          global_step, epoch, num_epochs,
+                                          100, loss_kwargs=loss_kwargs)
+        else:
+            global_step = train_one_epoch(model, train_loader,
+                                          criterion, optimizer,
+                                          scheduler, device, writer,
+                                          global_step, epoch, num_epochs,
+                                          100)
+        val_loss, val_acc, at_least_one_correct_tot = validate(model, val_loader,
+                                                               criterion, device,
+                                                               epoch, num_epochs)
 
         writer.add_scalar(
             "val/loss",

@@ -1,0 +1,9 @@
+#data_dir=Path(__file__).parent.parent.resolve() / "dmd",   # Your data folder
+data_dir: /home/antares/Tesis_Data/dmd
+num_classes: 3
+sequence_length: 32  # Or -1 for full video
+sample_one_each: 2
+batch_size: 2
+num_epochs: 50
+loss_fn: ???
+lr: 1e-4
