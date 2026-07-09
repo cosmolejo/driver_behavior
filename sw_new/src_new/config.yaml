@@ -1,5 +1,5 @@
 #data_dir=Path(__file__).parent.parent.resolve() / "dmd",   # Your data folder
-data_dir: /home/antares/Tesis_Data/dmd
+data_dir: /home/antares/Tesis_Data/dmd_user_split
 num_classes: 3
 sequence_length: 32  # Or -1 for full video
 sample_one_each: 2
@@ -7,3 +7,16 @@ batch_size: 2
 num_epochs: 50
 loss_fn: ???
 lr: 1e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search
+  storage: sqlite:///optuna_study.db
+  n_trials: 50
+  search_epochs: 12   # épocas reducidas durante la búsqueda
+  final_epochs: 50    # épocas completas para retrain_best.py
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

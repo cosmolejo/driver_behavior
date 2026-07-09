@@ -114,15 +114,25 @@ class MobileNetLSTMAttention(nn.Module):
     
 
 
-def get_model(num_classes, use_transformer=False):
+def get_model(
+    num_classes,
+    hidden_dim=256,
+    lstm_layers=2,
+    dropout=0.3,
+    freeze_backbone=True,
+    use_transformer=False,
+    transformer_layers=2,
+    nhead=8,
+    feedforward_dim=1024,
+):
     return MobileNetLSTMAttention(
         num_classes=num_classes,
-        hidden_dim=256,
-        lstm_layers=2,
-        dropout=0.3,
-        freeze_backbone=True,
+        hidden_dim=hidden_dim,
+        lstm_layers=lstm_layers,
+        dropout=dropout,
+        freeze_backbone=freeze_backbone,
         use_transformer=use_transformer,
-        transformer_layers=2,
-        nhead=8,
-        feedforward_dim=1024
+        transformer_layers=transformer_layers,
+        nhead=nhead,
+        feedforward_dim=feedforward_dim,
     )
