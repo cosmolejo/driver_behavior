@@ -30,8 +30,8 @@ def objective(trial: optuna.Trial) -> float:
     pct_start = trial.suggest_float("pct_start", 0.05, 0.3)
     div_factor = trial.suggest_categorical("div_factor", [10, 25, 50])
 
-    # --- Batch size (limitado por memoria de GPU con video) ---
-    batch_size = trial.suggest_categorical("batch_size", [2, 4])
+    # --- Batch efectivo: segmentos acumulados antes de cada optimizer.step() ---
+    accumulation_steps = trial.suggest_categorical("accumulation_steps", [2, 4, 8])
 
     # --- Arquitectura ---
     hidden_dim = trial.suggest_categorical("hidden_dim", [128, 256, 512])
@@ -57,7 +57,8 @@ def objective(trial: optuna.Trial) -> float:
         num_classes=BASE_CONF.num_classes,
         sequence_length=BASE_CONF.sequence_length,
         sample_one_each=BASE_CONF.sample_one_each,
-        batch_size=batch_size,
+        accumulation_steps=accumulation_steps,
+        max_windows_per_forward=BASE_CONF.max_windows_per_forward,
         num_epochs=OPT_CONF.search_epochs,
         loss_fn=loss_fn,
         loss_kwargs=loss_kwargs,

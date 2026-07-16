@@ -7,6 +7,8 @@ if __name__ == "__main__":
     conf = OmegaConf.load("config.yaml")
     cli_config = OmegaConf.from_cli()
     conf = OmegaConf.merge(conf, cli_config)
+    if conf.optuna.study_name is not None:
+        del conf.optuna
     train_pipeline(
         **conf
         # data_dir=Path(__file__).parent.parent.resolve() / "dmd",   # Your data folder

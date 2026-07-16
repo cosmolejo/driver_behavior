@@ -1,9 +1,14 @@
-#data_dir=Path(__file__).parent.parent.resolve() / "dmd",   # Your data folder
 data_dir: /home/antares/Tesis_Data/dmd_user_split
 num_classes: 3
-sequence_length: 32  # Or -1 for full video
+sequence_length: 32  # ventanas largas; segmentos más cortos usan todos sus frames
 sample_one_each: 2
-batch_size: 2
+
+# Antes: batch_size (windows por batch, mezcladas entre segmentos).
+# Ahora la loss se promedia por segmento antes del backward, así que estos
+# dos parámetros reemplazan a batch_size:
+accumulation_steps: 4       # segmentos acumulados antes de cada optimizer.step()
+max_windows_per_forward: 8  # tope de windows por forward (memoria), no cambia el resultado
+
 num_epochs: 50
 loss_fn: ???
 lr: 1e-4

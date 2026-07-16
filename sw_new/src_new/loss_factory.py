@@ -11,41 +11,33 @@ class FocalLossWrapper(nn.Module):
       - inputs: logits (N, C)
       - targets: one-hot float (N, C)
     pero el resto del pipeline maneja labels como índices de clase (N,).
-    Este wrapper hace el one-hot internamente para que la loss tenga
-    la misma firma que CrossEntropyLoss: loss(outputs, labels).
+    Este wrapper hace el one-hot internamente para que la loss tenga la
+    misma firma que CrossEntropyLoss: loss(outputs, labels) -> (N,).
+
+    reduction siempre es 'none': la agregación (promedio por segmento) se
+    hace en trainer.py, no acá.
     """
 
-    def __init__(
-        self,
-        num_classes: int,
-        alpha: float = 0.25,
-        gamma: float = 2.0,
-        reduction: str = "mean",
-    ):
+    def __init__(self, num_classes: int, alpha: float = 0.25, gamma: float = 2.0):
         super().__init__()
         self.num_classes = num_classes
         self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
 
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         targets_onehot = F.one_hot(targets, num_classes=self.num_classes).float()
-        return ops.sigmoid_focal_loss(
-            inputs,
-            targets_onehot,
-            alpha=self.alpha,
-            gamma=self.gamma,
-            reduction=self.reduction,
-        )
+        per_class_loss = ops.sigmoid_focal_loss(
+            inputs, targets_onehot, alpha=self.alpha, gamma=self.gamma, reduction="none"
+        )  # (N, C)
+        return per_class_loss.sum(dim=1)  # (N,) — una loss escalar por muestra
 
 
 class LossFactory:
     """
     Interfaz unificada: toda loss devuelta es un nn.Module con firma
-    loss(outputs, labels) -> escalar. Esto elimina el caso especial que
-    existía en trainer.py para sigmoid_focal_loss (loss_kwargs en cada
-    forward pass); ahora los kwargs se fijan una sola vez, al construir
-    la loss.
+    loss(outputs, labels) -> tensor (N,), SIN reducir. La agregación
+    (promedio por segmento, luego por batch de segmentos) se hace siempre
+    en trainer.py, para poder implementar el esquema de loss-por-segmento.
     """
 
     @staticmethod
@@ -57,6 +49,7 @@ class LossFactory:
     ) -> Callable:
         if loss_name in ("cross_entropy", "CE_label_smoothing", "CE_weight"):
             ce_kwargs = dict(kwargs)
+            ce_kwargs["reduction"] = "none"
             if weight is not None:
                 ce_kwargs["weight"] = weight
             return nn.CrossEntropyLoss(**ce_kwargs)
