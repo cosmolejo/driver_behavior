@@ -35,6 +35,26 @@ def compute_class_weights(dataset: SegmentDataset, num_classes: int, power: floa
     return torch.tensor(weights, dtype=torch.float)
 
 
+def compute_macro_f1(all_preds: torch.Tensor, all_labels: torch.Tensor, num_classes: int) -> float:
+    """
+    Macro-F1 a nivel window (misma granularidad que val/accuracy actual).
+    Clases sin TP+FP o sin TP+FN se tratan como F1=0 para esa clase
+    (equivalente a zero_division=0 de sklearn), en vez de NaN.
+    """
+    f1s = []
+    for c in range(num_classes):
+        tp = ((all_preds == c) & (all_labels == c)).sum().item()
+        fp = ((all_preds == c) & (all_labels != c)).sum().item()
+        fn = ((all_preds != c) & (all_labels == c)).sum().item()
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        f1s.append(f1)
+
+    return sum(f1s) / num_classes
+
+
 def segment_forward_backward(
     model,
     criterion,
@@ -152,13 +172,16 @@ def train_one_epoch(
     return global_step
 
 
-def validate(model, dataloader, criterion, device, epoch, num_epochs, max_windows_per_forward: int):
+def validate(model, dataloader, criterion, device, epoch, num_epochs, max_windows_per_forward: int, num_classes: int):
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_windows = 0
     segments_with_a_correct_window = 0
     total_segments = 0
+
+    all_preds = []
+    all_labels = []
 
     pbar = tqdm(
         enumerate(dataloader),
@@ -185,6 +208,8 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs, max_window
 
                 _, predicted = outputs.max(1)
                 seg_correct_mask.append((predicted == chunk_labels).cpu())
+                all_preds.append(predicted.cpu())
+                all_labels.append(chunk_labels.cpu())
 
             seg_correct_mask = torch.cat(seg_correct_mask)
 
@@ -199,7 +224,12 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs, max_window
     epoch_loss = total_loss / total_windows
     epoch_acc = total_correct / total_windows
     at_least_one_correct_tot = segments_with_a_correct_window / total_segments
-    return epoch_loss, epoch_acc, at_least_one_correct_tot
+
+    all_preds = torch.cat(all_preds)
+    all_labels = torch.cat(all_labels)
+    macro_f1 = compute_macro_f1(all_preds, all_labels, num_classes)
+
+    return epoch_loss, epoch_acc, at_least_one_correct_tot, macro_f1
 
 
 # ==========================
@@ -232,8 +262,10 @@ def train_pipeline(
     importar cuántas windows haya generado. `accumulation_steps` segmentos
     se acumulan antes de cada optimizer.step() (batch efectivo fijo).
 
-    Si se pasa `trial` (optuna.Trial), se reporta val_loss al final de cada
-    época para permitir pruning. Devuelve el mejor val_loss observado.
+    Si se pasa `trial` (optuna.Trial), se reporta val_macro_f1 al final de
+    cada época para permitir pruning (dirección "maximize" en el study).
+    Devuelve el mejor val_macro_f1 observado. val_loss se sigue trackeando
+    y logueando en TensorBoard, pero ya no es la métrica de selección.
     """
     loss_kwargs = dict(loss_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
@@ -309,6 +341,7 @@ def train_pipeline(
 
     best_val_acc = 0.0
     best_val_loss = float("inf")
+    best_val_macro_f1 = 0.0
     global_step = 0
 
     for epoch in range(num_epochs):
@@ -319,16 +352,19 @@ def train_pipeline(
             max_windows_per_forward=max_windows_per_forward,
             log_every_n_steps=50,
         )
-        val_loss, val_acc, at_least_one_correct_tot = validate(
+        val_loss, val_acc, at_least_one_correct_tot, val_macro_f1 = validate(
             model, val_loader, criterion, device, epoch, num_epochs,
             max_windows_per_forward=max_windows_per_forward,
+            num_classes=num_classes,
         )
 
         writer.add_scalar("val/loss", val_loss, global_step)
         writer.add_scalar("val/accuracy", val_acc, global_step)
         writer.add_scalar("val/at_least_one_correct", at_least_one_correct_tot, global_step)
+        writer.add_scalar("val/macro_f1", val_macro_f1, global_step)
 
         best_val_loss = min(best_val_loss, val_loss)
+        best_val_macro_f1 = max(best_val_macro_f1, val_macro_f1)
 
         if save_checkpoints:
             if val_acc > best_val_acc:
@@ -359,10 +395,10 @@ def train_pipeline(
             best_val_acc = max(best_val_acc, val_acc)
 
         if trial is not None:
-            trial.report(val_loss, epoch)
+            trial.report(val_macro_f1, epoch)
             if trial.should_prune():
                 writer.close()
                 raise optuna.TrialPruned()
 
     writer.close()
-    return best_val_loss
+    return best_val_macro_f1

@@ -18,9 +18,9 @@ div_factor: 25
 
 # --- Solo usados por optuna_search.py, no por main.py ---
 optuna:
-  study_name: driver_behavior_search
+  study_name: driver_behavior_search_macrof1
   storage: sqlite:///optuna_study.db
-  n_trials: 50
+  n_trials: 25
   search_epochs: 12   # épocas reducidas durante la búsqueda
   final_epochs: 50    # épocas completas para retrain_best.py
   pruner_min_resource: 3
