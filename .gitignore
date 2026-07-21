@@ -338,3 +338,8 @@ experiments/
 /src/runs/
 /src/pretrained_weights/*.tar
 .vscode/settings.json
+*.pyc
+*.pth
+*.pte
+*.tar*
+*.db

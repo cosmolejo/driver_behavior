@@ -1,4 +1,4 @@
-data_dir: /home/antares/Tesis_Data/dmd_user_split
+data_dir: /home/agomez/Documents/dmd_user_split
 num_classes: 3
 sequence_length: 32  # ventanas largas; segmentos más cortos usan todos sus frames
 sample_one_each: 2
