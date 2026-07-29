@@ -23,7 +23,7 @@ def compute_class_weights(dataset: SegmentDataset, num_classes: int, power: floa
     """
     Pesos inversamente proporcionales a la frecuencia de cada clase, contada
     en SEGMENTOS (no en windows) para ser consistente con el esquema de
-    pesar cada segmento por igual sin importar cuántas windows genere.
+    pesar cada segmento por igual sin importar cu�ntas windows genere.
     Elevados a `power` (tuneable), normalizados para que promedien 1.
     """
     counts = np.zeros(num_classes, dtype=np.float64)
@@ -69,19 +69,22 @@ def segment_forward_backward(
     `max_windows_per_forward` (para no reventar memoria en segmentos con
     muchas windows), y hace backward() incremental por chunk.
 
-    La normalización (dividir por num_windows del segmento, y por
+    La normalizaci�n (dividir por num_windows del segmento, y por
     loss_scale = 1/accumulation_steps) asegura que el gradiente acumulado
-    sea matemáticamente idéntico a haber promediado las windows del
-    segmento en un solo forward gigante. El tamaño de chunk es solo una
+    sea matem�ticamente id�ntico a haber promediado las windows del
+    segmento en un solo forward gigante. El tama�o de chunk es solo una
     perilla de memoria/velocidad, no cambia el resultado.
 
-    Devuelve: (loss_promedio_del_segmento (float), correctos, num_windows)
+    Devuelve: (loss_promedio_del_segmento (float), correctos, num_windows,
+               preds_cpu, labels_cpu)
     """
     num_windows = windows.shape[0]
     labels_expanded = label.repeat(num_windows).to(device)
 
     total_loss = 0.0
     total_correct = 0
+    seg_preds = []
+    seg_labels = []
 
     for start in range(0, num_windows, max_windows_per_forward):
         chunk = windows[start:start + max_windows_per_forward].to(device, dtype=torch.float)
@@ -90,7 +93,7 @@ def segment_forward_backward(
         outputs = model(chunk)
         per_window_loss = criterion(outputs, chunk_labels)  # (chunk_size,), reduction='none'
 
-        # Promedio sobre el segmento completo * escala de acumulación,
+        # Promedio sobre el segmento completo * escala de acumulaci�n,
         # partido en este chunk (ver docstring)
         chunk_loss = per_window_loss.sum() / num_windows * loss_scale
         chunk_loss.backward()
@@ -98,8 +101,13 @@ def segment_forward_backward(
         total_loss += per_window_loss.sum().item()
         _, predicted = outputs.max(1)
         total_correct += (predicted == chunk_labels).sum().item()
+        seg_preds.append(predicted.detach().cpu())
+        seg_labels.append(chunk_labels.detach().cpu())
 
-    return total_loss / num_windows, total_correct, num_windows
+    seg_preds = torch.cat(seg_preds)
+    seg_labels = torch.cat(seg_labels)
+
+    return total_loss / num_windows, total_correct, num_windows, seg_preds, seg_labels
 
 
 def train_one_epoch(
@@ -113,6 +121,7 @@ def train_one_epoch(
     global_step,
     epoch,
     num_epochs,
+    num_classes: int,
     accumulation_steps: int,
     max_windows_per_forward: int,
     log_every_n_steps=50,
@@ -121,6 +130,16 @@ def train_one_epoch(
     running_loss = 0.0
     running_correct = 0
     running_windows = 0
+
+    # Acumuladores a nivel de �POCA COMPLETA (independientes de la ventana
+    # de logging cada log_every_n_steps), para poder comparar train vs val
+    # en igualdad de condiciones (misma unidad de agregaci�n: toda la
+    # �poca) y detectar el gap real de generalizaci�n.
+    epoch_loss_sum = 0.0
+    epoch_correct = 0
+    epoch_windows = 0
+    epoch_preds = []
+    epoch_labels = []
 
     optimizer.zero_grad()
     segments_since_step = 0
@@ -133,7 +152,7 @@ def train_one_epoch(
     )
 
     for _, (windows, label, _) in pbar:
-        seg_loss, seg_correct, seg_windows = segment_forward_backward(
+        seg_loss, seg_correct, seg_windows, seg_preds, seg_labels = segment_forward_backward(
             model, criterion, windows, label, device,
             max_windows_per_forward=max_windows_per_forward,
             loss_scale=1.0 / accumulation_steps,
@@ -142,6 +161,12 @@ def train_one_epoch(
         running_loss += seg_loss * seg_windows
         running_correct += seg_correct
         running_windows += seg_windows
+
+        epoch_loss_sum += seg_loss * seg_windows
+        epoch_correct += seg_correct
+        epoch_windows += seg_windows
+        epoch_preds.append(seg_preds)
+        epoch_labels.append(seg_labels)
 
         segments_since_step += 1
         if segments_since_step == accumulation_steps:
@@ -164,12 +189,24 @@ def train_one_epoch(
                 running_windows = 0
 
     # Si sobran segmentos acumulados sin completar un accumulation_steps
-    # (último batch de la época), se descartan esos gradientes parciales
-    # llamando zero_grad implícitamente en la próxima época; no se hace
+    # (�ltimo batch de la �poca), se descartan esos gradientes parciales
+    # llamando zero_grad impl�citamente en la pr�xima �poca; no se hace
     # optimizer.step() con un accumulation incompleto para no sesgar la
     # escala del gradiente.
 
-    return global_step
+    epoch_train_loss = epoch_loss_sum / epoch_windows
+    epoch_train_acc = epoch_correct / epoch_windows
+    epoch_preds = torch.cat(epoch_preds)
+    epoch_labels = torch.cat(epoch_labels)
+    epoch_train_macro_f1 = compute_macro_f1(epoch_preds, epoch_labels, num_classes)
+
+    # Logueados en el mismo global_step que val, para poder comparar
+    # train vs val directamente en TensorBoard (mismo punto en el eje x).
+    writer.add_scalar("train/epoch_loss", epoch_train_loss, global_step)
+    writer.add_scalar("train/epoch_accuracy", epoch_train_acc, global_step)
+    writer.add_scalar("train/epoch_macro_f1", epoch_train_macro_f1, global_step)
+
+    return global_step, epoch_train_loss, epoch_train_acc, epoch_train_macro_f1
 
 
 def validate(model, dataloader, criterion, device, epoch, num_epochs, max_windows_per_forward: int, num_classes: int):
@@ -255,17 +292,30 @@ def train_pipeline(
     trial: Optional["optuna.Trial"] = None,
     run_name: str = "video_classifier",
     save_checkpoints: bool = True,
+    early_stopping_patience: Optional[int] = None,
+    unfreeze_schedule: Optional[dict] = None,
+    unfreeze_lr_decay: float = 0.3,
 ):
     """
     Entrenamiento con loss promediada por segmento: cada segmento aporta UNA
-    contribución de gradiente (promedio de la CE de todas sus windows), sin
-    importar cuántas windows haya generado. `accumulation_steps` segmentos
+    contribuci�n de gradiente (promedio de la CE de todas sus windows), sin
+    importar cu�ntas windows haya generado. `accumulation_steps` segmentos
     se acumulan antes de cada optimizer.step() (batch efectivo fijo).
 
     Si se pasa `trial` (optuna.Trial), se reporta val_macro_f1 al final de
-    cada época para permitir pruning (dirección "maximize" en el study).
+    cada �poca para permitir pruning (direcci�n "maximize" en el study).
     Devuelve el mejor val_macro_f1 observado. val_loss se sigue trackeando
-    y logueando en TensorBoard, pero ya no es la métrica de selección.
+    y logueando en TensorBoard, pero ya no es la m�trica de selecci�n.
+
+    El checkpoint "best" se guarda por mejor val_macro_f1 (antes era por
+    val_acc), consistente con el criterio de selecci�n de Optuna.
+
+    Si `early_stopping_patience` no es None, el entrenamiento corta antes
+    de completar `num_epochs` si val_macro_f1 no mejora durante esa
+    cantidad de �pocas consecutivas. Por defecto (None) queda deshabilitado
+    para no alterar el comportamiento de la b�squeda de Optuna
+    (search_epochs ya es corto); pensado para usarse en el retrain final
+    de num_epochs largo.
     """
     loss_kwargs = dict(loss_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
@@ -288,7 +338,7 @@ def train_pipeline(
                                   transform=transform)
 
     # batch_size=1: cada __getitem__ ya es "todas las windows de un
-    # segmento"; el agrupamiento real ocurre vía accumulation_steps.
+    # segmento"; el agrupamiento real ocurre v�a accumulation_steps.
     train_loader = DataLoader(
         train_dataset,
         batch_size=1,
@@ -315,16 +365,36 @@ def train_pipeline(
         loss_fn, num_classes=num_classes, weight=weight_tensor, **loss_kwargs
     )
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=lr,
-        weight_decay=weight_decay
-    )
+    # --- Descongelamiento progresivo (opcional) ---
+    # Los param groups se crean UNA sola vez, incluidos los que arrancan
+    # congelados: OneCycleLR fija sus max_lr en el constructor y agregar
+    # grupos despues lo rompe. Descongelar = togglear requires_grad.
+    unfreezer = None
+    if unfreeze_schedule is not None:
+        from progressive_unfreeze import ProgressiveUnfreezer
+
+        # OmegaConf puede entregar las claves como str; se normalizan a int
+        schedule = {int(k): int(v) for k, v in dict(unfreeze_schedule).items()}
+        unfreezer = ProgressiveUnfreezer(model, schedule, verbose=True)
+        print(unfreezer.summary())
+
+        optimizer = torch.optim.AdamW(
+            unfreezer.build_param_groups(base_lr=lr, decay=unfreeze_lr_decay),
+            weight_decay=weight_decay,
+        )
+        max_lr = unfreezer.max_lrs(base_lr=lr, decay=unfreeze_lr_decay)
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=lr,
+            weight_decay=weight_decay
+        )
+        max_lr = lr
 
     steps_per_epoch = max(1, len(train_loader) // accumulation_steps)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=lr,
+        max_lr=max_lr,
         epochs=num_epochs,
         steps_per_epoch=steps_per_epoch,
         pct_start=pct_start,
@@ -342,12 +412,19 @@ def train_pipeline(
     best_val_acc = 0.0
     best_val_loss = float("inf")
     best_val_macro_f1 = 0.0
+    epochs_without_improvement = 0
     global_step = 0
 
     for epoch in range(num_epochs):
-        global_step = train_one_epoch(
+        if unfreezer is not None:
+            model.train()                  # re-aplica freeze_bn
+            unfreezer.on_epoch_start(epoch)
+            unfreezer.assert_bn_frozen()   # falla ruidosamente si BN volvio a train
+
+        global_step, train_epoch_loss, train_epoch_acc, train_epoch_macro_f1 = train_one_epoch(
             model, train_loader, criterion, optimizer, scheduler,
             device, writer, global_step, epoch, num_epochs,
+            num_classes=num_classes,
             accumulation_steps=accumulation_steps,
             max_windows_per_forward=max_windows_per_forward,
             log_every_n_steps=50,
@@ -364,10 +441,13 @@ def train_pipeline(
         writer.add_scalar("val/macro_f1", val_macro_f1, global_step)
 
         best_val_loss = min(best_val_loss, val_loss)
+        best_val_acc = max(best_val_acc, val_acc)
+
+        improved = val_macro_f1 > best_val_macro_f1
         best_val_macro_f1 = max(best_val_macro_f1, val_macro_f1)
 
         if save_checkpoints:
-            if val_acc > best_val_acc:
+            if improved:
                 torch.save(
                     {
                         "epoch": epoch,
@@ -375,11 +455,10 @@ def train_pipeline(
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                         "scheduler_state_dict": scheduler.state_dict(),
-                        "best_val_acc": val_acc,
+                        "best_val_macro_f1": val_macro_f1,
                     },
                     models_dir / "model_best.pth"
                 )
-            best_val_acc = val_acc
             torch.save(
                 {
                     "epoch": epoch,
@@ -387,18 +466,32 @@ def train_pipeline(
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
-                    "best_val_acc": best_val_acc,
+                    "best_val_macro_f1": best_val_macro_f1,
                 },
                 models_dir / f"model_{epoch}.pth"
             )
-        else:
-            best_val_acc = max(best_val_acc, val_acc)
 
         if trial is not None:
             trial.report(val_macro_f1, epoch)
             if trial.should_prune():
                 writer.close()
                 raise optuna.TrialPruned()
+
+        if improved:
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if (
+            early_stopping_patience is not None
+            and epochs_without_improvement >= early_stopping_patience
+        ):
+            print(
+                f"Early stopping en �poca {epoch}: sin mejora de val_macro_f1 "
+                f"durante {epochs_without_improvement} �pocas consecutivas "
+                f"(mejor: {best_val_macro_f1:.4f})"
+            )
+            break
 
     writer.close()
     return best_val_macro_f1

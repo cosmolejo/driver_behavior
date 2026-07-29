@@ -1,0 +1,78 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+num_classes: 3
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# BATERIA DE EXPERIMENTOS: descongelamiento progresivo del backbone
+#
+# Este archivo contiene SOLO lo que es comun a todos los experimentos.
+# Lo que varia entre corridas (run_name, unfreeze_schedule,
+# unfreeze_lr_decay) se pasa por CLI desde run_unfreeze_experiments.sh.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# num_epochs FIJO en todos los experimentos. No modificar entre corridas.
+#
+# OneCycleLR se parametriza con el total de epocas: cambiar num_epochs
+# altera el ciclo completo de learning rate (duracion del warmup, ritmo
+# del annealing) y ademas cambia el significado de las epocas del
+# unfreeze_schedule. Dos corridas con distinto num_epochs no son
+# comparables aunque todo lo demas coincida.
+# ---------------------------------------------------------------------
+num_epochs: 12
+
+# Cross-entropy sin ponderar: mantiene la comparacion enfocada en el
+# efecto del descongelamiento, sin sumar la variable del pesado de clases.
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  # freeze_backbone: true arranca con todo el backbone congelado. Cuando
+  # hay unfreeze_schedule, el ProgressiveUnfreezer toma el control a partir
+  # de la epoca 0; cuando no lo hay, este flag ES el experimento de control.
+  freeze_backbone: true
+  # NO tocar. Descongelar pesos no descongela las estadisticas de BatchNorm:
+  # el problema de batches correlacionados (256 frames del mismo segmento
+  # por forward) persiste aunque los pesos esten congelados.
+  freeze_bn: true
+
+# ---------------------------------------------------------------------
+# DEBE quedar en null. NO poner un dict de ejemplo aca.
+#
+# OmegaConf FUSIONA diccionarios en los overrides de CLI en lugar de
+# reemplazarlos. Si este campo tuviera {0: 0, 5: 2, 10: 4} y el script
+# pasara {0: 0, 6: 2}, el resultado seria {0: 0, 5: 2, 6: 2, 10: 4}:
+# un schedule distinto al pedido, sin ningun mensaje de error.
+# Con null, el override reemplaza limpiamente.
+# ---------------------------------------------------------------------
+unfreeze_schedule: null
+unfreeze_lr_decay: 0.3
+
+# Se sobreescribe por CLI en cada experimento. El valor de aca solo actua
+# como red de seguridad si alguien corre main.py a mano sin pasar run_name.
+run_name: unfreeze_SIN_NOMBRE
+
+save_checkpoints: true
+early_stopping_patience: null   # 15 epocas es corto; cortar temprano
+                                # rompería la comparabilidad entre corridas
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

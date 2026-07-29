@@ -1,0 +1,73 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+num_classes: 3
+sequence_length: 32  # ventanas largas; segmentos más cortos usan todos sus frames
+sample_one_each: 2   # sin cambios, para mantener comparabilidad con corridas previas
+
+accumulation_steps: 4       # segmentos acumulados antes de cada optimizer.step()
+max_windows_per_forward: 8  # tope de windows por forward (memoria), no cambia el resultado
+
+# ---------------------------------------------------------------------
+# CORRIDA DE SANITY CHECK (post-fix de BatchNorm)
+#
+# Objetivo: verificar que la mecanica train/eval quedo sana. NO es una
+# corrida para maximizar macro-F1 ni para elegir hiperparametros.
+#
+# Criterio de exito (ver TensorBoard):
+#   - train/epoch_macro_f1 > val/macro_f1, con brecha que crece
+#   - train/epoch_loss baja de forma gradual, NO se desploma a 0
+#   - val/macro_f1 por encima del piso trivial (0.2221 a nivel window)
+#
+# Criterio de fallo:
+#   - train ~= val, o train < val  -> queda otra fuente de discrepancia
+#   - train/loss a 0 en pocas epocas -> el fix no surtio efecto
+# ---------------------------------------------------------------------
+num_epochs: 10
+
+# Cross-entropy sin ponderar a proposito: pesos de clase y focal loss
+# agregan variables de interpretacion. Para verificar mecanica conviene
+# el caso mas simple. Se espera que colapse parcialmente hacia la clase
+# mayoritaria a nivel window (unsafe, 47.5%) — eso NO invalida el test,
+# porque lo que se mide es la relacion train vs val, no el F1 absoluto.
+loss_fn: cross_entropy
+
+# lr mas alto que el default: con freeze_backbone=True solo se entrenan
+# LSTM + atencion + clasificador, que toleran (y necesitan) pasos mayores
+# que un fine-tuning del backbone completo.
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1    # warmup de 1 epoca sobre 10
+div_factor: 25
+
+# ---------------------------------------------------------------------
+# Arquitectura
+#
+# freeze_bn: true  -> EL FIX. Mantiene las 46 capas BatchNorm del backbone
+#                     en modo eval durante todo el entrenamiento.
+# freeze_backbone: true -> ademas de acelerar, deja el backbone totalmente
+#                     determinista, que es el requisito para poder cachear
+#                     features en el paso siguiente.
+#
+# hidden_dim/lstm_layers/dropout: valores por defecto de get_model. NO se
+# usan los del "mejor trial" de Optuna porque ese ranking quedo invalidado.
+# ---------------------------------------------------------------------
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+# Nombre distinto para no mezclar con runs anteriores en TensorBoard
+run_name: sanity_freeze_bn
+save_checkpoints: true
+early_stopping_patience: null  # 10 epocas es corto; no hace falta
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

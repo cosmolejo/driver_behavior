@@ -1,22 +1,22 @@
-from pathlib import Path
-import sys
 from omegaconf import OmegaConf
 from trainer import train_pipeline
 
 if __name__ == "__main__":
-    conf = OmegaConf.load("config.yaml")
     cli_config = OmegaConf.from_cli()
+
+    # Permite elegir el archivo de config sin editar este script:
+    #   python main.py config_path=config_sanity.yaml
+    # `pop` lo saca del override para que no se reenvie a train_pipeline
+    # como kwarg inexistente.
+    config_path = cli_config.pop("config_path", "config.yaml")
+
+    conf = OmegaConf.load(config_path)
     conf = OmegaConf.merge(conf, cli_config)
+
     if conf.optuna.study_name is not None:
         del conf.optuna
-    train_pipeline(
-        **conf
-        # data_dir=Path(__file__).parent.parent.resolve() / "dmd",   # Your data folder
-        # num_classes=3,
-        # sequence_length=32,  # Or -1 for full video
-        # sample_one_each=2,
-        # batch_size=2,
-        # num_epochs=500,
-        # loss_fn="CrossEntropyLoss",
-        # lr=1e-4
-    )
+
+    print(f"Config: {config_path}")
+    print(OmegaConf.to_yaml(conf))
+
+    train_pipeline(**conf)

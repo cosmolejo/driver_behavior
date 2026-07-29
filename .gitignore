@@ -343,3 +343,7 @@ experiments/
 *.pte
 *.tar*
 *.db
+sw_new/src_new/__pycache__/*
+sw_new/src_new/__pycache__/model.cpython-312.pyc
+sw_new/src_new/__pycache__/trainer.cpython-312.pyc
+sw_new/src_new/__pycache__/dataset.cpython-312.pyc
