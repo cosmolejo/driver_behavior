@@ -40,13 +40,29 @@ SELECTED=()
 #
 # Formato:  nombre | fase | unfreeze_schedule | unfreeze_lr_decay | descripcion
 #
-# Con num_epochs=15, las epocas del schedule equivalen a:
-#   epoca  3 -> 20% del entrenamiento
-#   epoca  6 -> 40%
-#   epoca 10 -> 67%
-#   epoca 13 -> 87%
+# CALIBRADO PARA num_epochs=12 (epocas 0..11).
 #
-# Recordar la distribucion de parametros del backbone (2.97M en total):
+# Dos restricciones al elegir las epocas de descongelamiento:
+#
+#   a) Una etapa con epoca >= num_epochs NUNCA se activa, y no da error.
+#      El experimento queda anulado en silencio.
+#
+#   b) Descongelar sirve de poco si ya casi no queda learning rate. Con
+#      OneCycleLR (pct_start=0.1, div_factor=25) y 12 epocas, la fraccion
+#      del max_lr al inicio de cada epoca es:
+#
+#        ep 1: 94%   ep 4: 84%   ep 7: 44%   ep 10:  8%
+#        ep 2: 99%   ep 5: 72%   ep 8: 30%   ep 11:  2%
+#        ep 3: 93%   ep 6: 59%   ep 9: 18%
+#
+#      Descongelar en la epoca 10 libera pesos que ya casi no se mueven.
+#      Las etapas se ubican en 3, 6 y 8 (93%, 59% y 30% del lr).
+#
+# Los schedules estan ANIDADOS: exp02 = exp01 + una etapa, exp03 = exp02 +
+# una etapa, todos con la primera etapa en la misma epoca. Asi exp01/02/03
+# difieren SOLO en profundidad, y exp01/exp04 SOLO en el momento.
+#
+# Distribucion de parametros del backbone (2.97M en total):
 #   ultimos 2 bloques (15-16) -> 32% de los pesos
 #   ultimos 4 bloques (13-16) -> 73%
 #   ultimos 8 bloques ( 9-16) -> 96%
@@ -54,17 +70,45 @@ SELECTED=()
 # descongelarlos: mucho costo de computo, muy poca capacidad extra.
 # ---------------------------------------------------------------------
 EXPERIMENTS=(
-  # --- FASE 1: ¿el descongelamiento aporta algo? (2 corridas) ---
-  "exp00_frozen|1|null|0.3|CONTROL: backbone 100% congelado todo el entrenamiento"
-  "exp02_last4|1|{0: 0, 6: 2, 10: 4}|0.3|Progresivo 2->4 bloques (hasta 73% del backbone)"
+  # === FASE 1: ESCALERA ESTATICA (4 corridas, ~19 h) ==================
+  # Cada corrida descongela un numero FIJO de bloques finales desde la
+  # epoca 0 y lo mantiene todo el entrenamiento. Aisla "cuanta capacidad"
+  # sin mezclarlo con "en que momento descongelar".
+  #
+  # El schedule {0: N} es exactamente eso: una sola etapa, en la epoca 0.
+  #
+  # Fraccion de los 2.97M parametros del backbone que queda entrenable:
+  #    0 bloques ->   0%      4 bloques (13-16) -> 73%
+  #    2 bloques ->  32%      8 bloques ( 9-16) -> 96%
+  #   17 bloques -> 100%
+  #
+  # Se omite el escalon de 8 en esta fase: 96% vs 100% es casi la misma
+  # capacidad, los bloques 0-8 juntos son solo el 4% de los pesos.
+  #
+  # lad00 es imprescindible aunque exp00_frozen ya haya corrido: aquel fue
+  # SIN semilla fija, y comparar una corrida sembrada contra una no sembrada
+  # reintroduce la varianza por semilla (~0.04 en macro-F1 de segmento) como
+  # confusor. De paso, la diferencia entre lad00 y exp00_frozen mide esa
+  # varianza para esta configuracion exacta.
+  "lad00_frozen|1|null|0.3|Escalon 0: backbone congelado. CONTROL con semilla fija"
+  "lad02_blocks2|1|{0: 2}|0.3|Escalon 2: bloques 15-16 entrenables desde ep 0 (32% del backbone)"
+  "lad04_blocks4|1|{0: 4}|0.3|Escalon 4: bloques 13-16 entrenables desde ep 0 (73%)"
+  "lad17_all|1|{0: 17}|0.3|Escalon 17: backbone completo entrenable desde ep 0 (100%)"
 
-  # --- FASE 2: si la fase 1 da positivo, ¿cuanto y cuando? (3 corridas) ---
-  "exp01_last2|2|{0: 0, 6: 2}|0.3|Solo ultimos 2 bloques (32%). Menos capacidad que exp02"
-  "exp03_last8|2|{0: 0, 6: 2, 10: 4, 13: 8}|0.3|Progresivo 2->4->8 (96%). Mas capacidad que exp02"
-  "exp04_last2_early|2|{0: 0, 3: 2}|0.3|Igual a exp01 pero descongela al 20%. Ablacion de TIMING"
+  # === FASE 2: RELLENO Y ABLACION DE LR (2 corridas, ~9.4 h) ==========
+  # Solo si la fase 1 muestra una tendencia que valga precisar.
+  "lad08_blocks8|2|{0: 8}|0.3|Escalon 8 (96%). Rellena el hueco entre 4 y 17"
+  "lad17_all_uniform|2|{0: 17}|1.0|Escalon 17 con lr UNIFORME. = el freeze_backbone=False de Optuna"
 
-  # --- FASE 3: opcional, ajuste fino del lr diferenciado (1 corrida) ---
-  "exp05_last4_decay01|3|{0: 0, 6: 2, 10: 4}|0.1|Igual a exp02 con lr de backbone 3x mas bajo"
+  # === FASE 3: DESCONGELAMIENTO PROGRESIVO (5 corridas, ~23 h) ========
+  # Solo si la escalera mostro que descongelar ayuda. Recien entonces tiene
+  # sentido preguntar si CONVIENE hacerlo de forma progresiva dentro de un
+  # mismo entrenamiento, en lugar de fijo desde el principio.
+  "prog02_to4|3|{0: 0, 3: 2, 6: 4}|0.3|Progresivo 2->4. Contra lad04 aisla el efecto de PROGRESAR"
+  "prog03_to8|3|{0: 0, 3: 2, 6: 4, 8: 8}|0.3|Progresivo 2->4->8. Contra lad08"
+  "prog01_to2|3|{0: 0, 3: 2}|0.3|Progresivo solo a 2 bloques. Contra lad02"
+  "prog04_to2_early|3|{0: 0, 1: 2}|0.3|Ablacion de TIMING contra prog01_to2"
+  "prog05_to4_decay01|3|{0: 0, 3: 2, 6: 4}|0.1|prog02_to4 con lr de backbone 3x mas bajo"
 )
 
 # ---------------------------------------------------------------------

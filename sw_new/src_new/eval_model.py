@@ -42,9 +42,19 @@ from model import get_model
 from torch.utils.data import DataLoader
 
 
-# Orden asumido de las macro-clases. Verificar contra la columna "support"
-# que imprime el script: la clase con ~80% del soporte debería ser `safe`.
-CLASS_NAMES = ["safe", "reaching", "unsafe"]
+# Orden de las macro-clases VERIFICADO contra partition_report.csv.
+#
+# Los indices siguen el orden ALFABETICO de las etiquetas, no el orden en
+# que suelen enunciarse (safe / reaching / unsafe):
+#
+#     0 = reaching     1 = safe     2 = unsafe
+#
+# Verificacion (VALIDATION): la cantidad de ventanas por segmento tiene que
+# crecer con la duracion del segmento, y solo cierra con este orden:
+#     clase 0: 195 seg, 76.9 fr de media  ->  6.21 win/seg
+#     clase 1: 250 seg, 171.0 fr          -> 18.18 win/seg
+#     clase 2: 169 seg, 294.6 fr          -> 34.00 win/seg
+CLASS_NAMES = ["reaching", "safe", "unsafe"]
 
 
 # ---------------------------------------------------------------------

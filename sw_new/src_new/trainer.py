@@ -295,6 +295,7 @@ def train_pipeline(
     early_stopping_patience: Optional[int] = None,
     unfreeze_schedule: Optional[dict] = None,
     unfreeze_lr_decay: float = 0.3,
+    seed: Optional[int] = 42,
 ):
     """
     Entrenamiento con loss promediada por segmento: cada segmento aporta UNA
@@ -319,6 +320,34 @@ def train_pipeline(
     """
     loss_kwargs = dict(loss_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
+
+    # -----------------------------------------------------------------
+    # Semilla
+    #
+    # Sin esto, dos corridas con hiperparametros identicos difieren por la
+    # inicializacion de LSTM/atencion/clasificador y por el orden de
+    # shuffling. Esa varianza medida sobre este dataset es de ~0.04 en
+    # macro-F1 a nivel segmento (hasta 0.08 en epocas tempranas), o sea
+    # mayor que el efecto de la mayoria de las ablaciones. Con la semilla
+    # fija, las corridas difieren SOLO por la intervencion.
+    #
+    # No se activa torch.use_deterministic_algorithms: forzaria kernels
+    # deterministas mas lentos y algunas ops de cuDNN (LSTM entre ellas)
+    # no lo soportan. Queda una no-determinacion residual de cuDNN, pero
+    # mucho menor que la de no sembrar nada.
+    # -----------------------------------------------------------------
+    generator = None
+    if seed is not None:
+        import random as _random
+
+        _random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+        print(f"Semilla fijada en {seed}")
 
     transform = transforms.Compose([
         transforms.ToPILImage(),
@@ -345,6 +374,7 @@ def train_pipeline(
         shuffle=True,
         num_workers=4,
         collate_fn=segment_collate_fn,
+        generator=generator,   # shuffling reproducible (None = comportamiento previo)
     )
     val_loader = DataLoader(
         val_dataset,
