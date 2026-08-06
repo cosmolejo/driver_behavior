@@ -71,15 +71,43 @@ def main():
     parser.add_argument("--csv-out", default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--partition-report", default=None,
+                        help="ruta a partition_report.csv. Necesario si alguna "
+                             "corrida se entreno con 9 clases finas.")
     parser.add_argument("--full-report", action="store_true",
                         help="imprime el reporte completo del mejor checkpoint por segmento")
     args = parser.parse_args()
 
     conf = OmegaConf.load(args.config)
 
-    # El dataset y el DataLoader se construyen UNA sola vez y se reusan para
-    # todos los checkpoints. persistent_workers evita respawnear los workers
-    # en cada evaluacion.
+    # Un checkpoint entrenado con 9 clases finas necesita que el dataset
+    # devuelva etiquetas FINAS: si se cargan las macro (0-2) y el modelo
+    # predice finas (0-8), se comparan espacios de etiquetas distintos y
+    # el macro-F1 sale cerca de cero. Se detecta mirando la ultima capa
+    # del classifier de cada checkpoint.
+    n_out_por_run = {}
+    for run in args.runs:
+        ck = find_checkpoints(Path(run))
+        if not ck:
+            continue
+        sd = torch.load(ck[0][1], map_location="cpu")
+        sd = sd.get("model_state_dict", sd)
+        n_out_por_run[run] = infer_model_kwargs(sd)["num_classes"]
+
+    modos = {n: ("fine" if n > len(CLASS_NAMES) else "macro")
+             for n in set(n_out_por_run.values())}
+    if "fine" in modos.values() and args.partition_report is None:
+        raise SystemExit(
+            "Alguna corrida tiene mas de 3 salidas (entrenada con clases "
+            "finas). Hace falta --partition-report para poder cargar las "
+            "etiquetas finas del dataset.\n"
+            "  Salidas por corrida: "
+            + ", ".join(f"{Path(r).name}={n}" for r, n in n_out_por_run.items())
+        )
+
+    # El dataset y el DataLoader se construyen UNA sola vez POR MODO y se
+    # reusan para todos los checkpoints de ese modo. persistent_workers
+    # evita respawnear los workers en cada evaluacion.
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((112, 112)),
@@ -87,18 +115,26 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
-    dataset = SegmentDataset(
-        os.path.join(conf.data_dir, args.split),
-        sequence_length=conf.sequence_length,
-        sample_one_each=conf.sample_one_each,
-        transform=transform,
-    )
-    loader = DataLoader(
-        dataset, batch_size=1, shuffle=False,
-        num_workers=args.num_workers, collate_fn=segment_collate_fn,
-        persistent_workers=args.num_workers > 0,
-    )
-    print(f"Split: {args.split}  ({len(dataset)} segmentos)\n")
+    loaders = {}       # modo -> DataLoader
+    label_groups = None
+    for modo in set(modos.values()):
+        ds = SegmentDataset(
+            os.path.join(conf.data_dir, args.split),
+            sequence_length=conf.sequence_length,
+            sample_one_each=conf.sample_one_each,
+            transform=transform,
+            label_mode=modo,
+            partition_report=args.partition_report if modo == "fine" else None,
+        )
+        loaders[modo] = DataLoader(
+            ds, batch_size=1, shuffle=False,
+            num_workers=args.num_workers, collate_fn=segment_collate_fn,
+            persistent_workers=args.num_workers > 0,
+        )
+        if modo == "fine":
+            label_groups = ds.label_groups
+        print(f"Split: {args.split}  ({len(ds)} segmentos, modo {modo})")
+    print()
 
     resultados = {}   # run -> [(epoca, f1_win, f1_seg, cm_win, cm_seg)]
 
@@ -118,6 +154,10 @@ def main():
         num_classes = inferido.pop("num_classes")
         model = get_model(num_classes, **inferido).to(args.device)
 
+        modo = "fine" if num_classes > len(CLASS_NAMES) else "macro"
+        loader = loaders[modo]
+        grupos = label_groups if modo == "fine" else None
+
         # Que epoca corresponde a model_best.pth
         best_path = run_dir / "model_best.pth"
         epoca_best = None
@@ -126,7 +166,7 @@ def main():
             epoca_best = b.get("epoch")
 
         print(f"[{nombre}] {len(ckpts)} checkpoints  |  arquitectura {inferido} "
-              f"+ {num_classes} clases  |  model_best = epoca {epoca_best}")
+              f"+ {num_classes} clases ({modo})  |  model_best = epoca {epoca_best}")
 
         filas = []
         for epoca, path in ckpts:
@@ -137,6 +177,7 @@ def main():
             cm_w, cm_s = evaluate(
                 model, loader, args.device, num_classes,
                 conf.max_windows_per_forward,
+                label_groups=grupos,
             )
             f1_w = macro_f1_from_cm(cm_w)
             f1_s = macro_f1_from_cm(cm_s)

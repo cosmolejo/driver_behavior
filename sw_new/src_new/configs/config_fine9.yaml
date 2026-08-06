@@ -1,0 +1,68 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+num_classes: 3          # se sobreescribe solo a 9 en modo fine (avisa por consola)
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# ENTRENAMIENTO CON LAS 9 CLASES FINAS
+#
+# Hipotesis: `unsafe` rinde peor que las otras dos macro-clases porque es
+# un concepto DISYUNTIVO (6 actividades visualmente distintas, con
+# duraciones medianas de 28 a 1014 frames). Entrenar con las 9 clases
+# finas -cada una coherente- y agregar a 3 en inferencia deberia ser un
+# problema de aprendizaje mas facil.
+#
+# La metrica `val/macro_f1` sigue siendo sobre las 3 MACRO-clases,
+# agregando probabilidades. Es directamente comparable con lad00_frozen
+# y con toda la bateria anterior. Ademas se loguea `val/macro_f1_fine`
+# (9 clases) como diagnostico.
+#
+# Comparar contra: lad00_frozen (misma config, label_mode=macro).
+# Todo lo demas debe quedar IDENTICO para que la unica variable sea el
+# esquema de etiquetado.
+# =====================================================================
+label_mode: fine
+partition_report: /home/agomez/Documents/dmd_user_split/partition_report.csv   # AJUSTAR RUTA
+
+num_epochs: 12
+
+# cross_entropy sin ponderar, igual que la escalera. Ojo: con 9 clases el
+# desbalance es mayor (safe_drive 2011 vs reach_backseat 65 segmentos en
+# train, 31x). Si el resultado es prometedor pero las clases chicas
+# colapsan, el siguiente paso es CE_weight; no se pone ahora para no
+# cambiar dos variables a la vez.
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+unfreeze_schedule: null
+unfreeze_lr_decay: 0.3
+
+seed: 42
+
+run_name: fine9_frozen
+save_checkpoints: true
+early_stopping_patience: null
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

@@ -1,0 +1,105 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+num_classes: 3
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# DATA AUGMENTATION sobre lad04 (la configuracion ganadora)
+#
+# Justificacion: lad04_e24 mostro sobreajuste REAL (train macro-F1 0.96
+# contra val 0.63, brecha 0.33). Hasta ese experimento el modelo parecia
+# subajustar y la augmentation no correspondia; ahora si hay algo que
+# regularizar.
+#
+# 12 epocas, NO 24: e24 demostro que el presupuesto extra solo agrega
+# memorizacion (val quedo igual y train se fue a 0.96). Ademas mantiene
+# la comparabilidad con lad04_blocks4 (0.5631 +- 0.0036 de meseta a nivel
+# segmento), que es el baseline contra el que hay que medir.
+#
+# Todo lo demas IDENTICO a config_unfreeze.yaml: la unica variable es la
+# augmentation.
+# =====================================================================
+
+num_epochs: 12
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+# lad04: 4 bloques (13-16, 73% del backbone) desde la epoca 0.
+# Gano contra 11 alternativas. NO tocar.
+unfreeze_schedule: {0: 4}
+unfreeze_lr_decay: 0.3
+
+seed: 42
+
+# ---------------------------------------------------------------------
+# AUGMENTATION
+#
+# augment: "photometric" | "temporal" | "both" | null
+#
+#   photometric -> brillo/contraste/saturacion/hue/gamma/blur/ruido,
+#                  con los parametros sampleados UNA vez por segmento
+#                  (un factor distinto por frame introduciria un parpadeo
+#                  que la LSTM puede confundir con señal temporal)
+#   temporal    -> jitter de frame-rate + offset + cutout de frames
+#   both        -> las dos
+#
+# Se arranca con "temporal": es la mas relevante para una arquitectura
+# LSTM, que aprende dinamica y no apariencia estatica.
+# ---------------------------------------------------------------------
+augment: temporal
+
+# Pasos candidatos para el jitter de frame-rate. Se elige UNO por segmento
+# y se usa en todas sus ventanas (si variara entre ventanas, T cambiaria y
+# el stack del segmento fallaria).
+#
+# El paso base es sample_one_each=2. Con [1,2,3] la ventana abarca 16, 32
+# o 48 frames crudos y devuelve siempre 16 frames: simula el mismo gesto
+# ejecutado mas rapido o mas lento, que es exactamente la variabilidad
+# inter-sujeto que falta con solo 21 conductores en entrenamiento.
+#
+# Los pasos que no entran en el segmento se descartan automaticamente.
+temporal_stride_jitter: [1, 2, 3]
+
+# Desplaza el inicio de todas las ventanas del segmento. Cambia que frames
+# concretos las componen entre una epoca y otra.
+temporal_offset_jitter: true
+
+# Frames a enmascarar por clip (se reemplazan por el anterior, que es como
+# se ve un frame droppeado real). 0 lo desactiva.
+# Mas seguro que el cutout espacial: no arriesga ocluir manos o volante,
+# que son la señal discriminativa.
+temporal_cutout_frames: 2
+
+# Intensidad de la augmentation por clase (0=reaching, 1=safe, 2=unsafe).
+# null = 1.0 para todas. Sirve como sobremuestreo implicito sin duplicar
+# frames ni tocar la loss.
+augment_strength_by_class: null
+
+run_name: lad04_aug_temporal
+save_checkpoints: true
+early_stopping_patience: null
+grad_clip: null
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

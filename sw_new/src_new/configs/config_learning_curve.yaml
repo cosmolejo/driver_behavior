@@ -1,0 +1,74 @@
+data_dir: /home/agomez/Documents/dmd_user_split/
+partition_report: /home/agomez/Documents/dmd_user_split/partition_report.csv  # AJUSTAR
+num_classes: 3
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# CURVA DE APRENDIZAJE POR NUMERO DE SUJETOS
+#
+# Pregunta: ¿el techo de rendimiento esta en el MODELO o en los DATOS?
+#
+# Hasta ahora la evidencia es indirecta:
+#   - mas capacidad no ayuda y llega a colapsar (lad08, lad17)
+#   - mas epocas solo memorizan (e24: train 0.96, val igual)
+#   - mas learning rate colapsa (>= 3e-4 en el backbone)
+#   - el etiquetado fino no aporta (fine9)
+#
+# Entrenar con 5, 10, 15 y 21 sujetos convierte esa inferencia en
+# evidencia DIRECTA. Si la curva sigue subiendo en 21 sin aplanarse, la
+# restriccion es la cantidad de conductores, no la arquitectura, y la
+# pendiente permite estimar cuantos harian falta.
+#
+# El punto de 21 sujetos YA EXISTE: es lad04_blocks4 (0.5631 +- 0.0036 de
+# meseta a nivel segmento, n=3). No hay que volver a correrlo.
+#
+# Los subconjuntos son ANIDADOS (5 subset de 10 subset de 15) y elegidos
+# por round-robin entre grupos, para que la unica variable sea CUANTOS
+# sujetos y no CUALES ni de que grupos.
+#
+# Validacion SIEMPRE completa: los puntos tienen que ser comparables.
+# =====================================================================
+
+num_epochs: 12
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+# lad04: la configuracion ganadora. No tocar.
+unfreeze_schedule: {0: 4}
+unfreeze_lr_decay: 0.3
+
+seed: 42
+
+# Se sobreescribe por CLI en cada punto de la curva.
+subject_subset: null
+
+augment: null
+run_name: lc_SIN_NOMBRE
+save_checkpoints: true
+early_stopping_patience: null
+grad_clip: null
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

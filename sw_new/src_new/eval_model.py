@@ -1,5 +1,5 @@
 """
-Evaluación detallada de un checkpoint: matriz de confusión, precision /
+Evaluaci�n detallada de un checkpoint: matriz de confusi�n, precision /
 recall / F1 por clase, y macro-F1, a nivel WINDOW y a nivel SEGMENTO.
 
 Objetivo principal
@@ -9,13 +9,13 @@ significan cosas muy distintas:
 
   (a) COLAPSO: el modelo predice casi todo como la clase mayoritaria.
       El macro-F1 se pega al "piso trivial" y las minoritarias tienen
-      recall ~0. El modelo no aprendió nada útil sobre ellas.
+      recall ~0. El modelo no aprendi� nada �til sobre ellas.
 
   (b) Performance pobre pero REAL: el modelo distingue las tres clases,
       solo que con muchos errores. Recall > 0 en las minoritarias.
 
-El script imprime el piso trivial calculado sobre la distribución real
-del split para que la comparación sea directa.
+El script imprime el piso trivial calculado sobre la distribuci�n real
+del split para que la comparaci�n sea directa.
 
 Uso
 ---
@@ -24,7 +24,7 @@ Uso
     python eval_model.py --checkpoint ... --csv-out resultados.csv
 
 La arquitectura (hidden_dim, lstm_layers, num_classes) se infiere del
-state_dict del checkpoint, así que no hace falta pasar los hiperparámetros
+state_dict del checkpoint, as� que no hace falta pasar los hiperpar�metros
 del trial a mano ni arriesgar un mismatch silencioso.
 """
 import argparse
@@ -58,13 +58,13 @@ CLASS_NAMES = ["reaching", "safe", "unsafe"]
 
 
 # ---------------------------------------------------------------------
-# Métricas (implementadas a mano, sin sklearn, igual que en trainer.py)
+# M�tricas (implementadas a mano, sin sklearn, igual que en trainer.py)
 # ---------------------------------------------------------------------
 def confusion_matrix(preds: np.ndarray, labels: np.ndarray, num_classes: int) -> np.ndarray:
     """
     Devuelve una matriz (num_classes, num_classes) donde
     cm[i, j] = cantidad de muestras con label real i predichas como j.
-    Filas = verdad, columnas = predicción.
+    Filas = verdad, columnas = predicci�n.
     """
     cm = np.zeros((num_classes, num_classes), dtype=np.int64)
     for t, p in zip(labels, preds):
@@ -75,7 +75,7 @@ def confusion_matrix(preds: np.ndarray, labels: np.ndarray, num_classes: int) ->
 def per_class_metrics(cm: np.ndarray):
     """
     Deriva precision / recall / F1 / support por clase desde la matriz de
-    confusión. Divisiones por cero -> 0.0 (equivalente a zero_division=0).
+    confusi�n. Divisiones por cero -> 0.0 (equivalente a zero_division=0).
     """
     num_classes = cm.shape[0]
     out = []
@@ -114,7 +114,7 @@ def trivial_macro_f1(cm: np.ndarray) -> tuple:
     total = support.sum()
     majority = int(np.argmax(support))
 
-    # Para la clase mayoritaria: recall=1, precision=proporción de esa clase
+    # Para la clase mayoritaria: recall=1, precision=proporci�n de esa clase
     p = support[majority] / total
     f1_majority = 2 * p / (1 + p) if p > 0 else 0.0
     # El resto de las clases: F1 = 0
@@ -135,7 +135,7 @@ def format_report(cm: np.ndarray, title: str) -> str:
     lines.append(f" {title}")
     lines.append("=" * 72)
 
-    # --- Matriz de confusión (conteos) ---
+    # --- Matriz de confusi�n (conteos) ---
     lines.append("")
     lines.append("Matriz de confusion (filas = REAL, columnas = PREDICHO):")
     lines.append("")
@@ -158,7 +158,7 @@ def format_report(cm: np.ndarray, title: str) -> str:
             row_vals = [f"{cm[i, j] / total_row:.3f}" for j in range(num_classes)]
         lines.append(f"{n:>12}  " + "".join(f"{v:>12}" for v in row_vals))
 
-    # --- Métricas por clase ---
+    # --- M�tricas por clase ---
     lines.append("")
     lines.append(f"{'clase':>12}{'precision':>12}{'recall':>12}{'f1':>12}{'support':>12}")
     lines.append("-" * 60)
@@ -176,7 +176,7 @@ def format_report(cm: np.ndarray, title: str) -> str:
     delta = macro_f1 - floor
     lines.append(f"  margen vs piso  : {delta:+.4f}")
 
-    # --- Diagnóstico automático de colapso ---
+    # --- Diagn�stico autom�tico de colapso ---
     minority = [i for i in range(num_classes) if i != majority]
     recalls_min = [metrics[i]["recall"] for i in minority]
     pred_counts = cm.sum(axis=0)
@@ -193,7 +193,7 @@ def format_report(cm: np.ndarray, title: str) -> str:
         lines.append("    El modelo no esta aprendiendo las minoritarias.")
     elif delta <= 0.01:
         lines.append("  - El macro-F1 no supera el piso trivial de forma significativa.")
-        lines.append("    Hay algo de señal en las minoritarias, pero no alcanza.")
+        lines.append("    Hay algo de se�al en las minoritarias, pero no alcanza.")
     else:
         lines.append("  - NO hay colapso: el modelo supera el piso trivial y tiene")
         lines.append("    recall no trivial en al menos una clase minoritaria.")
@@ -209,7 +209,7 @@ def format_report(cm: np.ndarray, title: str) -> str:
 def infer_model_kwargs(state_dict: dict) -> dict:
     """
     Deduce hidden_dim, lstm_layers y num_classes del state_dict, para no
-    depender de que el usuario recuerde los hiperparámetros del trial.
+    depender de que el usuario recuerde los hiperpar�metros del trial.
     (dropout y freeze_backbone no afectan la evaluacion en model.eval()).
     """
     # LSTM bidireccional: weight_ih_l{i} tiene shape (4*hidden, input)
@@ -236,10 +236,11 @@ def infer_model_kwargs(state_dict: dict) -> dict:
 
 
 # ---------------------------------------------------------------------
-# Evaluación
+# Evaluaci�n
 # ---------------------------------------------------------------------
 @torch.no_grad()
-def evaluate(model, dataloader, device, num_classes, max_windows_per_forward):
+def evaluate(model, dataloader, device, num_classes, max_windows_per_forward,
+             label_groups=None):
     """
     Devuelve (cm_window, cm_segment).
 
@@ -249,7 +250,18 @@ def evaluate(model, dataloader, device, num_classes, max_windows_per_forward):
     - Nivel SEGMENTO: se promedian las probabilidades softmax de todas las
       ventanas del segmento y se toma el argmax. Es la unidad real de
       etiquetado y la que importa para la aplicacion final.
+
+    Si `label_groups` no es None, el modelo predice CLASES FINAS y las
+    matrices se devuelven ya agregadas a macro-clases: las probabilidades
+    de las componentes de cada grupo se suman (P(unsafe) = suma de las 6
+    actividades que la componen) y las etiquetas finas se traducen a macro.
+    Asi el resultado es comparable con el de un modelo entrenado a 3 clases.
     """
+    if label_groups is not None:
+        from fine_labels import aggregate_probs, map_fine_to_macro, MACRO_CLASSES
+        num_out = len(MACRO_CLASSES)
+    else:
+        num_out = num_classes
     model.eval()
 
     win_preds, win_labels = [], []
@@ -263,23 +275,32 @@ def evaluate(model, dataloader, device, num_classes, max_windows_per_forward):
         for start in range(0, num_windows, max_windows_per_forward):
             chunk = windows[start:start + max_windows_per_forward].to(device, dtype=torch.float)
             outputs = model(chunk)
-            probs = torch.softmax(outputs, dim=1)
+            if label_groups is None:
+                probs = torch.softmax(outputs, dim=1)
+            else:
+                # Suma de probabilidades por grupo: la probabilidad de la
+                # union de eventos excluyentes es la suma de las suyas.
+                probs = aggregate_probs(outputs, label_groups)
             probs_acc.append(probs.cpu())
 
-            win_preds.append(outputs.argmax(1).cpu())
-            win_labels.append(labels_expanded[start:start + max_windows_per_forward].cpu())
+            win_preds.append(probs.argmax(1).cpu())
+            chunk_lab = labels_expanded[start:start + max_windows_per_forward]
+            if label_groups is not None:
+                chunk_lab = map_fine_to_macro(chunk_lab, label_groups)
+            win_labels.append(chunk_lab.cpu())
 
         # Agregacion a nivel segmento: promedio de probabilidades
         seg_prob = torch.cat(probs_acc).mean(dim=0)
         seg_preds.append(int(seg_prob.argmax().item()))
-        seg_labels.append(int(label.item()))
+        lab = int(label.item())
+        seg_labels.append(label_groups[lab] if label_groups is not None else lab)
 
     win_preds = torch.cat(win_preds).numpy()
     win_labels = torch.cat(win_labels).numpy()
 
-    cm_window = confusion_matrix(win_preds, win_labels, num_classes)
+    cm_window = confusion_matrix(win_preds, win_labels, num_out)
     cm_segment = confusion_matrix(
-        np.array(seg_preds), np.array(seg_labels), num_classes
+        np.array(seg_preds), np.array(seg_labels), num_out
     )
     return cm_window, cm_segment
 
@@ -292,6 +313,9 @@ def main():
         "--split", default="VALIDATION", choices=["TRAIN", "VALIDATION", "TEST"]
     )
     parser.add_argument("--csv-out", default=None, help="opcional: guarda metricas por clase")
+    parser.add_argument("--partition-report", default=None,
+                        help="ruta a partition_report.csv. Necesario si el "
+                             "checkpoint se entreno con 9 clases finas.")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args()
@@ -327,11 +351,20 @@ def main():
                              std=[0.229, 0.224, 0.225]),
     ])
 
+    modo = "fine" if num_classes > len(CLASS_NAMES) else "macro"
+    if modo == "fine" and args.partition_report is None:
+        raise SystemExit(
+            f"El checkpoint tiene {num_classes} salidas (clases finas). "
+            "Hace falta --partition-report para cargar las etiquetas finas."
+        )
+
     dataset = SegmentDataset(
         os.path.join(conf.data_dir, args.split),
         sequence_length=conf.sequence_length,
         sample_one_each=conf.sample_one_each,
         transform=transform,
+        label_mode=modo,
+        partition_report=args.partition_report if modo == "fine" else None,
     )
     loader = DataLoader(
         dataset,
@@ -346,9 +379,13 @@ def main():
     if missing or unexpected:
         print(f"AVISO al cargar pesos -> faltantes: {missing} | inesperados: {unexpected}")
 
+    grupos = dataset.label_groups if modo == "fine" else None
     cm_window, cm_segment = evaluate(
-        model, loader, args.device, num_classes, conf.max_windows_per_forward
+        model, loader, args.device, num_classes, conf.max_windows_per_forward,
+        label_groups=grupos,
     )
+    if modo == "fine":
+        num_classes = len(CLASS_NAMES)   # las matrices ya vienen agregadas
 
     print(format_report(cm_window, f"NIVEL WINDOW  ({args.split})"))
     print(format_report(cm_segment, f"NIVEL SEGMENTO  ({args.split})"))

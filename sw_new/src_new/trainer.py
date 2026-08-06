@@ -122,8 +122,10 @@ def train_one_epoch(
     epoch,
     num_epochs,
     num_classes: int,
+    label_groups: Optional[list],
     accumulation_steps: int,
     max_windows_per_forward: int,
+    grad_clip: Optional[float] = None,
     log_every_n_steps=50,
 ):
     model.train()
@@ -170,6 +172,13 @@ def train_one_epoch(
 
         segments_since_step += 1
         if segments_since_step == accumulation_steps:
+            # Recorte de norma de gradiente. Sin esto, descongelar los
+            # bloques tempranos del backbone puede producir updates lo
+            # bastante grandes como para destruir las features de
+            # ImageNet en las primeras iteraciones: el modelo colapsa a
+            # predecir siempre la clase mayoritaria y no se recupera.
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
@@ -198,7 +207,19 @@ def train_one_epoch(
     epoch_train_acc = epoch_correct / epoch_windows
     epoch_preds = torch.cat(epoch_preds)
     epoch_labels = torch.cat(epoch_labels)
-    epoch_train_macro_f1 = compute_macro_f1(epoch_preds, epoch_labels, num_classes)
+    if label_groups is None:
+        epoch_train_macro_f1 = compute_macro_f1(epoch_preds, epoch_labels, num_classes)
+    else:
+        # En train se mapea el argmax fino a macro (en vez de sumar
+        # probabilidades) para no tener que guardar las 9 probabilidades
+        # de cada ventana. Es una metrica de diagnostico, sirve para leer
+        # la brecha train-val; la de seleccion es la de validate().
+        from fine_labels import MACRO_CLASSES, map_fine_to_macro
+        epoch_train_macro_f1 = compute_macro_f1(
+            map_fine_to_macro(epoch_preds, label_groups),
+            map_fine_to_macro(epoch_labels, label_groups),
+            len(MACRO_CLASSES),
+        )
 
     # Logueados en el mismo global_step que val, para poder comparar
     # train vs val directamente en TensorBoard (mismo punto en el eje x).
@@ -209,7 +230,9 @@ def train_one_epoch(
     return global_step, epoch_train_loss, epoch_train_acc, epoch_train_macro_f1
 
 
-def validate(model, dataloader, criterion, device, epoch, num_epochs, max_windows_per_forward: int, num_classes: int):
+def validate(model, dataloader, criterion, device, epoch, num_epochs,
+             max_windows_per_forward: int, num_classes: int,
+             label_groups: Optional[list] = None):
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -219,6 +242,7 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs, max_window
 
     all_preds = []
     all_labels = []
+    all_macro_preds = []   # solo en modo fine
 
     pbar = tqdm(
         enumerate(dataloader),
@@ -248,6 +272,15 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs, max_window
                 all_preds.append(predicted.cpu())
                 all_labels.append(chunk_labels.cpu())
 
+                if label_groups is not None:
+                    # P(macro) = suma de las P(finas) de ese grupo. Sumar
+                    # probabilidades (no logits) es lo correcto: la
+                    # probabilidad de la union de eventos excluyentes es
+                    # la suma de sus probabilidades.
+                    from fine_labels import aggregate_probs
+                    agg = aggregate_probs(outputs, label_groups)
+                    all_macro_preds.append(agg.argmax(1).cpu())
+
             seg_correct_mask = torch.cat(seg_correct_mask)
 
             total_loss += seg_loss_sum
@@ -264,9 +297,20 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs, max_window
 
     all_preds = torch.cat(all_preds)
     all_labels = torch.cat(all_labels)
-    macro_f1 = compute_macro_f1(all_preds, all_labels, num_classes)
 
-    return epoch_loss, epoch_acc, at_least_one_correct_tot, macro_f1
+    if label_groups is None:
+        macro_f1 = compute_macro_f1(all_preds, all_labels, num_classes)
+        macro_f1_fine = None
+    else:
+        from fine_labels import MACRO_CLASSES, map_fine_to_macro
+        macro_f1_fine = compute_macro_f1(all_preds, all_labels, num_classes)
+        macro_f1 = compute_macro_f1(
+            torch.cat(all_macro_preds),
+            map_fine_to_macro(all_labels, label_groups),
+            len(MACRO_CLASSES),
+        )
+
+    return epoch_loss, epoch_acc, at_least_one_correct_tot, macro_f1, macro_f1_fine
 
 
 # ==========================
@@ -296,6 +340,15 @@ def train_pipeline(
     unfreeze_schedule: Optional[dict] = None,
     unfreeze_lr_decay: float = 0.3,
     seed: Optional[int] = 42,
+    label_mode: str = "macro",
+    partition_report: Optional[str] = None,
+    grad_clip: Optional[float] = None,
+    augment: Optional[str] = None,
+    temporal_stride_jitter: Optional[list] = None,
+    temporal_offset_jitter: bool = False,
+    temporal_cutout_frames: int = 0,
+    augment_strength_by_class: Optional[dict] = None,
+    subject_subset: Optional[int] = None,
 ):
     """
     Entrenamiento con loss promediada por segmento: cada segmento aporta UNA
@@ -349,22 +402,94 @@ def train_pipeline(
         generator.manual_seed(seed)
         print(f"Semilla fijada en {seed}")
 
-    transform = transforms.Compose([
+    # ------------------------------------------------------------------
+    # Pipeline de transforms
+    #
+    # Sin augmentation el orden es el de siempre (todo por frame). Con
+    # augmentation hay que PARTIRLO, porque las transformaciones de clip
+    # necesitan el rango [0, 1]:
+    #
+    #     por frame : ToPILImage -> Resize -> ToTensor      (queda en [0,1])
+    #     por clip  : augment(clip, label)                  <- nivel SEGMENTO
+    #     por clip  : ClipNormalize                         <- despues
+    #
+    # Normalizar antes de la augmentation romperia los ops de color
+    # (adjust_brightness y compa�ia asumen [0,1]).
+    # ------------------------------------------------------------------
+    MEAN = [0.485, 0.456, 0.406]
+    STD = [0.229, 0.224, 0.225]
+
+    base_transform = [
         transforms.ToPILImage(),
         transforms.Resize((112, 112)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                              std=[0.229, 0.224, 0.225])
-    ])
+    ]
 
-    train_dataset = SegmentDataset(os.path.join(data_dir, "TRAIN"),
-                                    sequence_length=sequence_length,
-                                    sample_one_each=sample_one_each,
-                                    transform=transform)
-    val_dataset = SegmentDataset(os.path.join(data_dir, "VALIDATION"),
-                                  sequence_length=sequence_length,
-                                  sample_one_each=sample_one_each,
-                                  transform=transform)
+    if augment is None:
+        transform = transforms.Compose(
+            base_transform + [transforms.Normalize(mean=MEAN, std=STD)]
+        )
+        normalize = None
+        train_augment = None
+    else:
+        from augmentation import build_clip_augment
+        from dataset import ClipNormalize
+
+        transform = transforms.Compose(base_transform)
+        normalize = ClipNormalize(MEAN, STD)
+
+        if augment not in ("photometric", "temporal", "both"):
+            raise ValueError(
+                f"augment debe ser 'photometric', 'temporal' o 'both', no {augment!r}"
+            )
+
+        train_augment = build_clip_augment(
+            train=True,
+            strength_by_class=dict(augment_strength_by_class or {}),
+            use_photometric=augment in ("photometric", "both"),
+            use_temporal_cutout=augment in ("temporal", "both")
+                                 and temporal_cutout_frames > 0,
+            temporal_cutout_frames=temporal_cutout_frames,
+            layout="CTHW",
+        )
+        print(f"Augmentation: {augment}"
+              f" | stride_jitter={temporal_stride_jitter}"
+              f" | offset_jitter={temporal_offset_jitter}"
+              f" | cutout_frames={temporal_cutout_frames}")
+
+    ds_kwargs = dict(sequence_length=sequence_length,
+                     sample_one_each=sample_one_each,
+                     transform=transform,
+                     label_mode=label_mode,
+                     partition_report=partition_report,
+                     normalize=normalize)
+
+    # La augmentation y el jitter temporal van SOLO en train. En validacion
+    # la evaluacion tiene que ser determinista, o la metrica de una misma
+    # epoca cambiaria entre corridas y dejaria de ser comparable.
+    # El submuestreo por sujeto va SOLO en train: validacion siempre
+    # completa, o los puntos de la curva no serian comparables entre si.
+    train_dataset = SegmentDataset(
+        os.path.join(data_dir, "TRAIN"),
+        subject_subset=subject_subset,
+        augment=train_augment,
+        temporal_stride_jitter=(list(temporal_stride_jitter)
+                                if (augment in ("temporal", "both")
+                                    and temporal_stride_jitter) else None),
+        temporal_offset_jitter=(temporal_offset_jitter
+                                and augment in ("temporal", "both")),
+        **ds_kwargs)
+    val_dataset = SegmentDataset(os.path.join(data_dir, "VALIDATION"), **ds_kwargs)
+
+    # En modo "fine" la red tiene 9 salidas, pero la METRICA sigue siendo
+    # macro-F1 sobre las 3 macro-clases (agregando probabilidades), para
+    # que `val/macro_f1` sea comparable con toda la bateria anterior.
+    label_groups = getattr(train_dataset, "label_groups", None)
+    n_out = len(train_dataset.class_to_idx)
+    if n_out != num_classes:
+        print(f"AVISO: config dice num_classes={num_classes} pero el dataset "
+              f"tiene {n_out} clases (label_mode={label_mode!r}). Se usa {n_out}.")
+        num_classes = n_out
 
     # batch_size=1: cada __getitem__ ya es "todas las windows de un
     # segmento"; el agrupamiento real ocurre v�a accumulation_steps.
@@ -455,20 +580,25 @@ def train_pipeline(
             model, train_loader, criterion, optimizer, scheduler,
             device, writer, global_step, epoch, num_epochs,
             num_classes=num_classes,
+            label_groups=label_groups,
             accumulation_steps=accumulation_steps,
+            grad_clip=grad_clip,
             max_windows_per_forward=max_windows_per_forward,
             log_every_n_steps=50,
         )
-        val_loss, val_acc, at_least_one_correct_tot, val_macro_f1 = validate(
+        val_loss, val_acc, at_least_one_correct_tot, val_macro_f1, val_macro_f1_fine = validate(
             model, val_loader, criterion, device, epoch, num_epochs,
             max_windows_per_forward=max_windows_per_forward,
             num_classes=num_classes,
+            label_groups=label_groups,
         )
 
         writer.add_scalar("val/loss", val_loss, global_step)
         writer.add_scalar("val/accuracy", val_acc, global_step)
         writer.add_scalar("val/at_least_one_correct", at_least_one_correct_tot, global_step)
         writer.add_scalar("val/macro_f1", val_macro_f1, global_step)
+        if val_macro_f1_fine is not None:
+            writer.add_scalar("val/macro_f1_fine", val_macro_f1_fine, global_step)
 
         best_val_loss = min(best_val_loss, val_loss)
         best_val_acc = max(best_val_acc, val_acc)
