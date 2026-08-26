@@ -1,0 +1,78 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+partition_report: /home/agomez/Documents/dmd_user_split/partition_report.csv  # AJUSTAR
+num_classes: 2          # se corrige solo desde el esquema; se deja explicito
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# CLASIFICADOR BINARIO: conduccion normal vs uso de telefono
+#
+# Motivacion: `unsafe` agrupa 6 actividades con duraciones medianas de 28
+# a 1014 frames y apariencias muy distintas. El experimento fine9 mostro
+# que separarlas en 9 clases y reagregar no ayuda (§11 del analisis).
+# Este experimento va por el otro lado: en vez de subdividir, RECORTA la
+# tarea a un subconjunto visualmente coherente.
+#
+# Incluye:  safe_drive  |  texting_left/right, phonecall_left/right
+# Excluye:  reach_side, reach_backseat, talking_to_passenger, radio
+#
+# Datos resultantes: 2.627 segmentos de train (52% del total), 326 de
+# validacion, 329 de test. Los 21 sujetos de train tienen al menos un
+# segmento de telefono.
+#
+# ATENCION AL COMPARAR: el piso trivial binario a nivel segmento es
+# 0.4340 en validacion (contra 0.1929 del problema de 3 clases). Un
+# macro-F1 de 0.70 aca NO es mejor que 0.5631 alla: son tareas distintas
+# con pisos distintos. Lo unico comparable es el MARGEN sobre el piso.
+#
+# Referencia de 3 clases: 0.5631 - 0.1929 = +0.3702 de margen.
+# =====================================================================
+
+label_mode: binary_phone
+
+num_epochs: 12
+
+# Sin ponderar, igual que la escalera. El desbalance por SEGMENTO es
+# 3.26:1 (safe:phone), que es lo que ve la perdida con window bagging.
+# Curiosamente por VENTANA es 0.97:1 —casi balanceado— porque las
+# llamadas duran ~1000 frames contra 148 de safe_drive.
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+# lad04: la configuracion ganadora (test 0.5570 contra 0.5331 del control).
+unfreeze_schedule: {0: 4}
+unfreeze_lr_decay: 0.3
+
+seed: 42
+
+augment: null
+subject_subset: null
+
+run_name: binary_phone_lad04_body
+save_checkpoints: true
+early_stopping_patience: null
+grad_clip: null
+
+# --- Solo usados por optuna_search.py, no por main.py ---
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3

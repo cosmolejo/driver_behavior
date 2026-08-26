@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 import cv2
@@ -44,6 +45,10 @@ class SegmentDataset(Dataset):
         temporal_offset_jitter: bool = False,
         subject_subset: Optional[int] = None,
         subject_subset_seed: int = 42,
+        balance_classes: bool = False,
+        balance_unit: Optional[str] = None,
+        windows_per_segment: Optional[int] = None,
+        balance_seed: int = 42,
     ):
         """
         label_mode:
@@ -96,18 +101,63 @@ class SegmentDataset(Dataset):
             escala el rendimiento con la cantidad de conductores, que es
             la restriccion sospechada del dataset.
 
+        balance_unit / windows_per_segment:
+            Modo de balanceo de clases:
+
+              None       sin balanceo
+              "segment"  iguala SEGMENTOS por clase (submuestrea la
+                         mayoritaria round-robin entre sujetos)
+              "window"   iguala VENTANAS por clase conservando TODOS los
+                         segmentos: recorta ventanas dentro de los
+                         segmentos de la clase mayoritaria
+              "both"     iguala ambas. Requiere windows_per_segment.
+
+            AVISO sobre "window": con window bagging la perdida se promedia
+            dentro de cada segmento, asi que cada segmento aporta una sola
+            contribucion de gradiente sin importar cuantas ventanas tenga.
+            Igualar ventanas NO cambia el peso efectivo de las clases en el
+            entrenamiento; eso lo determina el conteo de SEGMENTOS. Afecta
+            la metrica a nivel ventana, el computo y la varianza de la
+            estimacion de la perdida por segmento.
+
+        balance_classes (retrocompatible) / windows_per_segment:
+            Balanceo de clases. Las dos unidades de conteo estan en tension
+            y no se pueden igualar a la vez sin tocar las ventanas:
+
+                un segmento de safe_drive da ~21 ventanas
+                un segmento de phone      da ~70 ventanas
+
+            Igualar SEGMENTOS deja las ventanas 0.30:1; igualar VENTANAS
+            deja los segmentos 3.26:1.
+
+            La solucion es `windows_per_segment=K`: se descartan los
+            segmentos con menos de K ventanas y de los que quedan se toman
+            EXACTAMENTE K, equiespaciadas a lo largo del segmento (no las K
+            primeras, para no sesgar hacia el inicio). Con la misma cantidad
+            de segmentos por clase, ambas unidades quedan balanceadas de
+            forma exacta.
+
+            `balance_classes=True` sin K solo iguala los segmentos.
+
+            El submuestreo de la clase mayoritaria es ROUND-ROBIN entre
+            sujetos: se toma un segmento de cada sujeto por turno hasta
+            llegar al objetivo. Asi ningun sujeto desaparece y se acota el
+            peso de los que aportan mas segmentos.
+
+            Aplicar esto a VALIDACION o TEST cambia el piso trivial y hace
+            que la metrica deje de reflejar la distribucion real de
+            despliegue: se usa solo en entrenamiento.
+
         En modo "fine" quedan disponibles:
             self.class_to_idx  -> {actividad: indice}, 9 entradas
             self.label_groups  -> lista de 9 ints, indice fino -> indice macro
                                   (se pasa a train_pipeline para agregar en
                                   validacion)
         """
-        if label_mode not in ("macro", "fine"):
-            raise ValueError(f"label_mode debe ser 'macro' o 'fine', no {label_mode!r}")
-        if label_mode == "fine" and partition_report is None:
+        if label_mode != "macro" and partition_report is None:
             raise ValueError(
-                "label_mode='fine' requiere `partition_report` "
-                "(ruta a partition_report.csv)."
+                f"label_mode={label_mode!r} requiere `partition_report`: la "
+                "actividad de grano fino no esta en el arbol de directorios."
             )
 
         self.root_dir = root_dir
@@ -142,31 +192,42 @@ class SegmentDataset(Dataset):
 
         if label_mode == "macro":
             self.class_to_idx = dict(self.macro_to_idx)
+            self.class_names = sorted(self.macro_to_idx, key=self.macro_to_idx.get)
             self.label_groups = None
             self._activity_lookup = None
         else:
             from fine_labels import (
-                build_fine_class_to_idx,
-                build_label_groups,
-                load_activity_lookup,
+                build_label_groups, get_scheme, load_activity_lookup,
             )
-            self.class_to_idx = build_fine_class_to_idx(partition_report)
-            self.label_groups = build_label_groups(partition_report)
+            amap, names = get_scheme(label_mode, partition_report)
+            self.class_to_idx = amap
+            self.class_names = names
             self._activity_lookup = load_activity_lookup(partition_report)
+            # `label_groups` solo tiene sentido en el esquema "fine": las 9
+            # actividades se agregan a las 3 macro-clases en inferencia. En
+            # los esquemas con mapa propio (binario, ternario limpio) las
+            # clases del modelo YA son las finales; no hay que agregar nada.
+            self.label_groups = (
+                build_label_groups(partition_report) if label_mode == "fine" else None
+            )
 
         # --- Submuestreo por sujeto ---
         self.subject_subset = subject_subset
         self._subject_lookup = None
         self.selected_subjects = None
+        # El lookup de sujetos tambien lo necesita el balanceo round-robin
+        if partition_report is not None:
+            from fine_labels import load_subject_lookup
+            self._subject_lookup = load_subject_lookup(partition_report)
+
         if subject_subset is not None:
             if partition_report is None:
                 raise ValueError(
                     "subject_subset requiere `partition_report`: la identidad "
                     "del sujeto no esta en el arbol de directorios."
                 )
-            from fine_labels import load_subject_lookup, select_subjects
+            from fine_labels import select_subjects
             split_name = Path(root_dir).name.upper()
-            self._subject_lookup = load_subject_lookup(partition_report)
             self.selected_subjects = set(
                 select_subjects(partition_report, subject_subset,
                                 split=split_name, seed=subject_subset_seed)
@@ -174,11 +235,34 @@ class SegmentDataset(Dataset):
             print(f"[{split_name}] submuestreo: {len(self.selected_subjects)} sujetos "
                   f"-> {sorted(self.selected_subjects)}")
 
+        # Resolucion del modo de balanceo (retrocompatible con
+        # balance_classes=True, que equivale a "segment" o a "both" segun
+        # se haya fijado windows_per_segment).
+        if balance_unit is None and balance_classes:
+            balance_unit = "both" if windows_per_segment is not None else "segment"
+        if balance_unit not in (None, "segment", "window", "both"):
+            raise ValueError(
+                f"balance_unit debe ser 'segment', 'window', 'both' o None, "
+                f"no {balance_unit!r}"
+            )
+        if balance_unit == "both" and windows_per_segment is None:
+            raise ValueError(
+                "balance_unit='both' requiere windows_per_segment: es la unica "
+                "forma de igualar segmentos y ventanas a la vez."
+            )
+        self.balance_unit = balance_unit
+        self.balance_classes = balance_unit is not None
+        self.windows_per_segment = windows_per_segment
+        self.balance_seed = balance_seed
+
         self.unmatched = []   # segmentos sin entrada en el CSV (solo modo fine)
 
         self._build_index()
 
-        if label_mode == "fine":
+        if self.balance_unit is not None or windows_per_segment is not None:
+            self._balance_index(root_dir)
+
+        if label_mode != "macro":
             if self.unmatched:
                 print(
                     f"AVISO: {len(self.unmatched)} segmentos de {root_dir} no "
@@ -188,11 +272,10 @@ class SegmentDataset(Dataset):
             conteo = {}
             for _, lab, _, _ in self.segments:
                 conteo[lab] = conteo.get(lab, 0) + 1
-            inv = {v: k for k, v in self.class_to_idx.items()}
-            print(f"[{Path(root_dir).name}] {len(self.segments)} segmentos, "
-                  f"{len(self.class_to_idx)} clases finas:")
+            print(f"[{Path(root_dir).name}] esquema {label_mode!r}: "
+                  f"{len(self.segments)} segmentos, {len(self.class_names)} clases")
             for i in sorted(conteo):
-                print(f"    {i}  {inv[i]:<24}{conteo[i]:>6}")
+                print(f"    {i}  {self.class_names[i]:<24}{conteo[i]:>6}")
 
     def _build_index(self):
         for cls_name, macro_label in self.macro_to_idx.items():
@@ -209,7 +292,7 @@ class SegmentDataset(Dataset):
                         continue
 
                     # Filtro por sujeto (curva de aprendizaje)
-                    if self._subject_lookup is not None:
+                    if self.selected_subjects is not None:
                         subj = self._subject_lookup.get((session_name, video_name))
                         if subj is None or subj not in self.selected_subjects:
                             continue
@@ -223,6 +306,10 @@ class SegmentDataset(Dataset):
                         activity = self._activity_lookup.get((session_name, video_name))
                         if activity is None:
                             self.unmatched.append((session_name, video_name))
+                            continue
+                        # Actividad fuera del esquema -> el segmento se EXCLUYE
+                        # (p. ej. `radio` en el esquema binario de telefono).
+                        if activity not in self.class_to_idx:
                             continue
                         label = self.class_to_idx[activity]
 
@@ -242,6 +329,156 @@ class SegmentDataset(Dataset):
 
                     if starts:
                         self.segments.append((video_path, label, starts, window_len))
+
+    def _submuestrear_ventanas(self, segs, objetivo, rnd):
+        """
+        Reduce el total de ventanas de una clase hasta `objetivo`,
+        CONSERVANDO todos los segmentos.
+
+        El recorte se reparte proporcionalmente entre los segmentos y las
+        ventanas que quedan se toman equiespaciadas, de modo que cada
+        segmento conserve cobertura de principio a fin. Ningun segmento
+        baja de 1 ventana.
+        """
+        total = sum(len(st) for _, _, st, _ in segs)
+        if total <= objetivo:
+            return segs
+
+        f = objetivo / total
+        recortados, cuotas = [], []
+        for video_path, label, starts, wl in segs:
+            k = max(1, int(round(len(starts) * f)))
+            k = min(k, len(starts))
+            cuotas.append(k)
+
+        # Ajuste fino para llegar al objetivo exacto: se quita (o agrega) de
+        # los segmentos mas largos, que son los que menos pierden en
+        # cobertura relativa.
+        orden = sorted(range(len(segs)), key=lambda i: -len(segs[i][2]))
+        while sum(cuotas) > objetivo:
+            avance = False
+            for i in orden:
+                if sum(cuotas) <= objetivo:
+                    break
+                if cuotas[i] > 1:
+                    cuotas[i] -= 1; avance = True
+            if not avance:
+                break
+        while sum(cuotas) < objetivo:
+            avance = False
+            for i in orden:
+                if sum(cuotas) >= objetivo:
+                    break
+                if cuotas[i] < len(segs[i][2]):
+                    cuotas[i] += 1; avance = True
+            if not avance:
+                break
+
+        for (video_path, label, starts, wl), k in zip(segs, cuotas):
+            if k >= len(starts):
+                recortados.append((video_path, label, starts, wl))
+            else:
+                idx = np.linspace(0, len(starts) - 1, k).round().astype(int)
+                nuevos = [starts[i] for i in sorted(set(idx.tolist()))]
+                recortados.append((video_path, label, nuevos, wl))
+        return recortados
+
+    def _balance_index(self, root_dir: str):
+        """
+        Aplica el balanceo segun `balance_unit`. Ver __init__.
+
+        NOTA IMPORTANTE sobre el modo "window": con window bagging la
+        perdida se promedia DENTRO de cada segmento, asi que cada segmento
+        aporta una contribucion de gradiente sin importar cuantas ventanas
+        tenga. Igualar ventanas NO cambia el peso efectivo de las clases en
+        el entrenamiento -eso lo determina el conteo de SEGMENTOS-. Afecta
+        la metrica a nivel ventana, el tiempo de computo y la varianza de
+        la estimacion de la perdida por segmento.
+        """
+        import random as _random
+
+        rnd = _random.Random(self.balance_seed)
+        K = self.windows_per_segment
+
+        # --- 1. Tope de ventanas por segmento (solo modo "both") ---
+        if K is not None:
+            recortados, descartados = [], 0
+            for video_path, label, starts, window_len in self.segments:
+                if len(starts) < K:
+                    descartados += 1
+                    continue
+                idx = np.linspace(0, len(starts) - 1, K).round().astype(int)
+                nuevos = [starts[i] for i in sorted(set(idx.tolist()))]
+                recortados.append((video_path, label, nuevos, window_len))
+            self.segments = recortados
+            print(f"  tope de {K} ventanas/segmento: {descartados} segmentos "
+                  f"descartados por ser demasiado cortos")
+
+        if self.balance_unit is None:
+            return
+
+        por_clase = {}
+        for seg in self.segments:
+            por_clase.setdefault(seg[1], []).append(seg)
+
+        # --- 2a. Igualar SEGMENTOS (modos "segment" y "both") ---
+        if self.balance_unit in ("segment", "both"):
+            objetivo = min(len(v) for v in por_clase.values())
+            nuevas = {}
+            for label, segs in sorted(por_clase.items()):
+                if len(segs) <= objetivo:
+                    nuevas[label] = segs
+                    continue
+
+                # Round-robin entre sujetos: ninguno desaparece y se acota
+                # el peso de los que aportan mas segmentos.
+                por_sujeto = {}
+                for seg in segs:
+                    if self._subject_lookup is not None:
+                        partes = Path(seg[0]).parts
+                        subj = self._subject_lookup.get((partes[-3], partes[-2]), "?")
+                    else:
+                        subj = "?"
+                    por_sujeto.setdefault(subj, []).append(seg)
+                for k in por_sujeto:
+                    rnd.shuffle(por_sujeto[k])
+
+                sujetos = sorted(por_sujeto)
+                elegidos, i = [], 0
+                while len(elegidos) < objetivo:
+                    avance = False
+                    for sj in sujetos:
+                        if len(elegidos) >= objetivo:
+                            break
+                        if i < len(por_sujeto[sj]):
+                            elegidos.append(por_sujeto[sj][i]); avance = True
+                    if not avance:
+                        break
+                    i += 1
+                nuevas[label] = elegidos
+            por_clase = nuevas
+
+        # --- 2b. Igualar VENTANAS (modos "window" y "both") ---
+        if self.balance_unit in ("window", "both"):
+            objetivo_w = min(sum(len(st) for _, _, st, _ in v)
+                             for v in por_clase.values())
+            por_clase = {
+                label: self._submuestrear_ventanas(segs, objetivo_w, rnd)
+                for label, segs in por_clase.items()
+            }
+
+        self.segments = [seg for segs in por_clase.values() for seg in segs]
+
+        # --- Resumen ---
+        conteo, ventanas = {}, {}
+        for _, label, starts, _ in self.segments:
+            conteo[label] = conteo.get(label, 0) + 1
+            ventanas[label] = ventanas.get(label, 0) + len(starts)
+        nombres = getattr(self, "class_names", None)
+        print(f"  balanceo '{self.balance_unit}' -> {len(self.segments)} segmentos")
+        for i in sorted(conteo):
+            n = nombres[i] if nombres else str(i)
+            print(f"     {i}  {n:<20}{conteo[i]:>6} seg  {ventanas[i]:>7} ventanas")
 
     def __len__(self):
         return len(self.segments)

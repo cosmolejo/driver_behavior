@@ -233,6 +233,27 @@ def train_one_epoch(
 def validate(model, dataloader, criterion, device, epoch, num_epochs,
              max_windows_per_forward: int, num_classes: int,
              label_groups: Optional[list] = None):
+    """
+    Evalua a DOS granularidades a la vez:
+
+    - NIVEL WINDOW: cada ventana es una muestra independiente.
+    - NIVEL SEGMENTO: se promedian las probabilidades softmax de todas las
+      ventanas del segmento y se toma el argmax.
+
+    El nivel de SEGMENTO es el que importa: es la unidad de etiquetado, la
+    unidad de decision de la aplicacion, y la unidad que pondera la perdida
+    (window bagging hace que cada segmento aporte una sola contribucion de
+    gradiente, sin importar cuantas ventanas genere).
+
+    Las dos metricas pueden ordenar DISTINTO, no es una diferencia de ruido:
+    en corridas largas se observo que una mejora mientras la otra empeora
+    durante epocas consecutivas, y que elegir el checkpoint por la metrica
+    de ventana cuesta hasta 0.047 de macro-F1 a nivel segmento.
+
+    Devuelve:
+        (loss, acc_window, at_least_one_correct,
+         macro_f1_window, macro_f1_fine, macro_f1_segment, acc_segment)
+    """
     model.eval()
     total_loss = 0.0
     total_correct = 0
@@ -243,6 +264,16 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs,
     all_preds = []
     all_labels = []
     all_macro_preds = []   # solo en modo fine
+
+    # Nivel segmento: una prediccion y una etiqueta por segmento
+    seg_preds = []
+    seg_labels = []
+
+    if label_groups is not None:
+        from fine_labels import aggregate_probs, map_fine_to_macro, MACRO_CLASSES
+        n_out = len(MACRO_CLASSES)
+    else:
+        n_out = num_classes
 
     pbar = tqdm(
         enumerate(dataloader),
@@ -258,6 +289,7 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs,
 
             seg_loss_sum = 0.0
             seg_correct_mask = []
+            seg_probs = []          # probabilidades de este segmento
 
             for start in range(0, num_windows, max_windows_per_forward):
                 chunk = windows[start:start + max_windows_per_forward].to(device, dtype=torch.float)
@@ -272,14 +304,17 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs,
                 all_preds.append(predicted.cpu())
                 all_labels.append(chunk_labels.cpu())
 
-                if label_groups is not None:
+                if label_groups is None:
+                    probs = torch.softmax(outputs, dim=1)
+                else:
                     # P(macro) = suma de las P(finas) de ese grupo. Sumar
                     # probabilidades (no logits) es lo correcto: la
                     # probabilidad de la union de eventos excluyentes es
                     # la suma de sus probabilidades.
-                    from fine_labels import aggregate_probs
-                    agg = aggregate_probs(outputs, label_groups)
-                    all_macro_preds.append(agg.argmax(1).cpu())
+                    probs = aggregate_probs(outputs, label_groups)
+                    all_macro_preds.append(probs.argmax(1).cpu())
+
+                seg_probs.append(probs.cpu())
 
             seg_correct_mask = torch.cat(seg_correct_mask)
 
@@ -290,6 +325,14 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs,
             total_segments += 1
             if seg_correct_mask.any():
                 segments_with_a_correct_window += 1
+
+            # Agregacion del segmento: promedio de probabilidades sobre sus
+            # ventanas. Promediar probabilidades (no logits ni votos) es la
+            # forma correcta de combinar predicciones de un mismo evento.
+            seg_prob = torch.cat(seg_probs).mean(dim=0)
+            seg_preds.append(int(seg_prob.argmax().item()))
+            lab = int(label.item())
+            seg_labels.append(label_groups[lab] if label_groups is not None else lab)
 
     epoch_loss = total_loss / total_windows
     epoch_acc = total_correct / total_windows
@@ -302,15 +345,85 @@ def validate(model, dataloader, criterion, device, epoch, num_epochs,
         macro_f1 = compute_macro_f1(all_preds, all_labels, num_classes)
         macro_f1_fine = None
     else:
-        from fine_labels import MACRO_CLASSES, map_fine_to_macro
         macro_f1_fine = compute_macro_f1(all_preds, all_labels, num_classes)
         macro_f1 = compute_macro_f1(
             torch.cat(all_macro_preds),
             map_fine_to_macro(all_labels, label_groups),
-            len(MACRO_CLASSES),
+            n_out,
         )
 
-    return epoch_loss, epoch_acc, at_least_one_correct_tot, macro_f1, macro_f1_fine
+    seg_preds_t = torch.tensor(seg_preds, dtype=torch.long)
+    seg_labels_t = torch.tensor(seg_labels, dtype=torch.long)
+    macro_f1_segment = compute_macro_f1(seg_preds_t, seg_labels_t, n_out)
+    acc_segment = (seg_preds_t == seg_labels_t).float().mean().item()
+
+    return (epoch_loss, epoch_acc, at_least_one_correct_tot,
+            macro_f1, macro_f1_fine, macro_f1_segment, acc_segment)
+
+
+
+def _rng_state() -> dict:
+    """
+    Estado de TODOS los generadores aleatorios del proceso principal.
+
+    Sin esto, reanudar produce un orden de shuffling y una secuencia de
+    augmentation distintos a los que habria tenido la corrida original: el
+    entrenamiento continua, pero no es el mismo que se interrumpio.
+    """
+    import random as _random
+
+    estado = {
+        "python": _random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        estado["cuda"] = torch.cuda.get_rng_state_all()
+    return estado
+
+
+def _restore_rng_state(estado: dict):
+    import random as _random
+
+    if not estado:
+        return
+    if "python" in estado:
+        _random.setstate(estado["python"])
+    if "numpy" in estado:
+        np.random.set_state(estado["numpy"])
+    if "torch" in estado:
+        torch.set_rng_state(estado["torch"].cpu().to(torch.uint8))
+    if "cuda" in estado and torch.cuda.is_available():
+        try:
+            torch.cuda.set_rng_state_all([t.cpu().to(torch.uint8) for t in estado["cuda"]])
+        except Exception as e:
+            print(f"  AVISO: no se pudo restaurar el estado RNG de CUDA ({e})")
+
+
+def _build_checkpoint(model, optimizer, scheduler, generator, epoch, global_step,
+                      estado_mejores: dict, config: dict, incluir_rng: bool = True) -> dict:
+    """
+    Checkpoint completo para reanudar exactamente donde se dejo.
+
+    Se guardan los `state_dict()`, NO los objetos: serializar el optimizer
+    entero con pickle ata el archivo a la definicion de la clase y, al
+    cargarlo, deja el optimizer apuntando a tensores deserializados en vez
+    de a los parametros del modelo vivo.
+    """
+    ck = {
+        "epoch": epoch,
+        "global_step": global_step,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "config": config,
+    }
+    ck.update(estado_mejores)
+    if generator is not None:
+        ck["dataloader_generator_state"] = generator.get_state()
+    if incluir_rng:
+        ck["rng_state"] = _rng_state()
+    return ck
 
 
 # ==========================
@@ -349,6 +462,15 @@ def train_pipeline(
     temporal_cutout_frames: int = 0,
     augment_strength_by_class: Optional[dict] = None,
     subject_subset: Optional[int] = None,
+    subject_subset_seed: int = 42,
+    resume_from: Optional[str] = None,
+    resume_weights_only: bool = True,
+    resume_optimizer: Optional[bool] = None,
+    resume_scheduler: Optional[bool] = None,
+    resume_epoch: Optional[bool] = None,
+    resume_restore_rng: Optional[bool] = None,
+    balance_classes: bool = False,
+    windows_per_segment: Optional[int] = None,
 ):
     """
     Entrenamiento con loss promediada por segmento: cada segmento aporta UNA
@@ -469,9 +591,15 @@ def train_pipeline(
     # epoca cambiaria entre corridas y dejaria de ser comparable.
     # El submuestreo por sujeto va SOLO en train: validacion siempre
     # completa, o los puntos de la curva no serian comparables entre si.
+    # El balanceo va SOLO en train. Aplicarlo a validacion cambiaria el
+    # piso trivial y la metrica dejaria de reflejar la distribucion real.
     train_dataset = SegmentDataset(
         os.path.join(data_dir, "TRAIN"),
+        balance_classes=balance_classes,
+        windows_per_segment=windows_per_segment,
+        balance_seed=seed if seed is not None else 42,
         subject_subset=subject_subset,
+        subject_subset_seed=subject_subset_seed,
         augment=train_augment,
         temporal_stride_jitter=(list(temporal_stride_jitter)
                                 if (augment in ("temporal", "both")
@@ -485,7 +613,9 @@ def train_pipeline(
     # macro-F1 sobre las 3 macro-clases (agregando probabilidades), para
     # que `val/macro_f1` sea comparable con toda la bateria anterior.
     label_groups = getattr(train_dataset, "label_groups", None)
-    n_out = len(train_dataset.class_to_idx)
+    # OJO: len(class_to_idx) cuenta ACTIVIDADES, no clases. En el esquema
+    # binario hay 5 actividades mapeadas a 2 clases.
+    n_out = len(getattr(train_dataset, 'class_names', train_dataset.class_to_idx))
     if n_out != num_classes:
         print(f"AVISO: config dice num_classes={num_classes} pero el dataset "
               f"tiene {n_out} clases (label_mode={label_mode!r}). Se usa {n_out}.")
@@ -510,6 +640,74 @@ def train_pipeline(
     )
 
     model = get_model(num_classes, **model_kwargs).to(device)
+
+    # ------------------------------------------------------------------
+    # Inicializacion desde un checkpoint existente
+    #
+    # resume_weights_only=True (default): carga SOLO los pesos y arranca un
+    # entrenamiento nuevo (optimizer y scheduler desde cero, epoca 0). Es lo
+    # que corresponde cuando se cambia de tarea -por ejemplo partir del
+    # modelo de 3 clases para entrenar uno binario- o cuando se quiere
+    # reentrenar con otra configuracion.
+    #
+    # resume_weights_only=False: reanuda una corrida interrumpida,
+    # restaurando tambien el estado del optimizer y del scheduler. Solo
+    # tiene sentido si TODO lo demas (lr, num_epochs, dataset) es identico:
+    # OneCycleLR guarda su posicion en el ciclo, y reanudarlo con otro
+    # presupuesto de epocas deja el learning rate en un punto arbitrario.
+    #
+    # La ultima capa del clasificador se descarta automaticamente si el
+    # numero de clases no coincide: es lo habitual al cambiar de esquema de
+    # etiquetado (3 clases -> 2), y sin esto `load_state_dict` fallaria.
+    # ------------------------------------------------------------------
+    ckpt = None
+    _res_opt = _res_sch = _res_ep = _restore_rng = False
+    if resume_from is not None:
+        ckpt = torch.load(resume_from, map_location=device)
+        sd = ckpt.get("model_state_dict", ckpt)
+
+        propio = model.state_dict()
+        descartadas = [
+            k for k, v in sd.items()
+            if k in propio and propio[k].shape != v.shape
+        ]
+        for k in descartadas:
+            del sd[k]
+
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        print(f"Checkpoint cargado: {resume_from}")
+        print(f"  epoca de origen : {ckpt.get('epoch', '?')}")
+        if descartadas:
+            print(f"  capas descartadas por forma incompatible: {descartadas}")
+            print(f"  -> se reinicializan al azar (cambio de numero de clases)")
+        if missing:
+            print(f"  faltantes  : {missing}")
+        if unexpected:
+            print(f"  inesperadas: {unexpected}")
+        print(f"  modo: {'solo pesos' if resume_weights_only else 'reanudar corrida completa'}")
+
+        # `resume_restore_rng` por defecto sigue al modo: se restaura al
+        # reanudar, no al partir de pesos.
+        #
+        # Restaurar el RNG en modo "solo pesos" hace que el shuffling
+        # arranque donde lo dejo la corrida anterior en lugar de en un
+        # estado limpio derivado de `seed`. Para un experimento nuevo eso
+        # no aporta reproducibilidad -la da `seed`- y ata el orden de los
+        # datos a una corrida que ya no es comparable. Se deja disponible
+        # por si se quiere continuar el flujo de datos exacto.
+        # Cada componente se controla por separado; por defecto siguen al
+        # modo (todo al reanudar, nada al partir de pesos).
+        _def = not resume_weights_only
+        _res_opt = _def if resume_optimizer is None else resume_optimizer
+        _res_sch = _def if resume_scheduler is None else resume_scheduler
+        _res_ep = _def if resume_epoch is None else resume_epoch
+        _restore_rng = _def if resume_restore_rng is None else resume_restore_rng
+        if resume_weights_only and _restore_rng:
+            _restore_rng_state(ckpt.get("rng_state", {}))
+            if generator is not None and "dataloader_generator_state" in ckpt:
+                generator.set_state(ckpt["dataloader_generator_state"])
+            print("  estado RNG restaurado del checkpoint "
+                  "(el shuffling continua el flujo anterior)")
 
     weight_tensor = None
     if loss_fn == "CE_weight":
@@ -546,6 +744,44 @@ def train_pipeline(
         )
         max_lr = lr
 
+    # ------------------------------------------------------------------
+    # Estado del optimizer
+    #
+    # Se carga ANTES de construir el scheduler, y se reimponen lr y
+    # weight_decay del config: `load_state_dict` sobrescribe los
+    # `param_groups` completos, incluidos lr, weight_decay, initial_lr y
+    # max_lr. Sin esta correccion, restaurar el optimizer impondria
+    # silenciosamente los hiperparametros del checkpoint y OneCycleLR
+    # anelaria hacia el max_lr viejo.
+    #
+    # Lo que SI vale la pena restaurar son los momentos de Adam (exp_avg,
+    # exp_avg_sq): llevan informacion sobre la curvatura de la perdida y
+    # evitan el arranque en frio de la correccion de sesgo en los primeros
+    # pasos del fine-tuning.
+    # ------------------------------------------------------------------
+    if ckpt is not None and _res_opt and "optimizer_state_dict" in ckpt:
+        guardado = ckpt["optimizer_state_dict"]
+        n_prev, n_ahora = len(guardado["param_groups"]), len(optimizer.param_groups)
+        if n_prev != n_ahora:
+            print(f"  AVISO: el checkpoint tiene {n_prev} param_groups y la "
+                  f"configuracion actual {n_ahora} (cambio unfreeze_schedule "
+                  f"o unfreeze_lr_decay). NO se restaura el optimizer.")
+            _res_opt = False
+        else:
+            hp = [{"lr": g["lr"], "weight_decay": g["weight_decay"]}
+                  for g in optimizer.param_groups]
+            optimizer.load_state_dict(guardado)
+            # Reimponer los hiperparametros del config y limpiar los rastros
+            # del scheduler anterior.
+            for g, orig in zip(optimizer.param_groups, hp):
+                g["lr"] = orig["lr"]
+                g["weight_decay"] = orig["weight_decay"]
+                g.pop("initial_lr", None)
+                g.pop("max_lr", None)
+                g.pop("min_lr", None)
+            print("  optimizer restaurado (momentos de Adam); lr y weight_decay "
+                  "tomados del config actual")
+
     steps_per_epoch = max(1, len(train_loader) // accumulation_steps)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -567,10 +803,63 @@ def train_pipeline(
     best_val_acc = 0.0
     best_val_loss = float("inf")
     best_val_macro_f1 = 0.0
+    best_val_macro_f1_seg = 0.0
     epochs_without_improvement = 0
+    start_epoch = 0
     global_step = 0
 
-    for epoch in range(num_epochs):
+    if ckpt is not None and (_res_sch or _res_ep):
+        # El scheduler guarda su POSICION en el ciclo de OneCycleLR.
+        # Restaurarlo continua el ciclo anterior, es decir que NO habra
+        # warmup: si lo que se busca es un fine-tuning que arranque con
+        # warmup desde pesos ya buenos, este flag debe quedar en False.
+        if _res_sch and "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+            print("  scheduler restaurado: el ciclo CONTINUA (sin warmup nuevo)")
+
+        if _res_ep:
+            start_epoch = int(ckpt.get("epoch", -1)) + 1
+            global_step = int(ckpt.get("global_step", 0))
+            best_val_macro_f1 = float(ckpt.get("best_val_macro_f1", 0.0))
+            best_val_macro_f1_seg = float(ckpt.get("best_val_macro_f1_segment", 0.0))
+            best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
+            best_val_acc = float(ckpt.get("best_val_acc", 0.0))
+            epochs_without_improvement = int(ckpt.get("epochs_without_improvement", 0))
+
+        # Estado de los generadores aleatorios: sin esto el shuffling y la
+        # augmentation siguen una secuencia distinta a la original.
+        _restore_rng_state(ckpt.get("rng_state", {}))
+        if generator is not None and "dataloader_generator_state" in ckpt:
+            generator.set_state(ckpt["dataloader_generator_state"])
+
+        # Aviso si la configuracion cambio: OneCycleLR guarda su posicion en
+        # el ciclo, asi que reanudar con otro num_epochs o lr deja el
+        # learning rate en un punto arbitrario.
+        cfg_prev = ckpt.get("config", {})
+        cfg_ahora = {"num_epochs": num_epochs, "lr": lr,
+                     "accumulation_steps": accumulation_steps,
+                     "label_mode": label_mode}
+        difs = {k: (cfg_prev.get(k), v) for k, v in cfg_ahora.items()
+                if k in cfg_prev and cfg_prev[k] != v}
+        if difs:
+            print("  AVISO: la configuracion cambio respecto del checkpoint.")
+            for k, (antes, ahora) in difs.items():
+                print(f"     {k}: {antes} -> {ahora}")
+            print("     El scheduler retoma su posicion del ciclo ANTERIOR; el "
+                  "resultado no equivale ni a la corrida original ni a una nueva.")
+
+        print(f"Reanudando desde la epoca {start_epoch}/{num_epochs}")
+        print(f"  global_step {global_step} | mejor macro-F1 segmento "
+              f"{best_val_macro_f1_seg:.4f} | epocas sin mejora "
+              f"{epochs_without_improvement}")
+        if "rng_state" not in ckpt:
+            print("  AVISO: el checkpoint no trae estado RNG (es de una version "
+                  "anterior). El shuffling no reproduce la corrida original.")
+        if start_epoch >= num_epochs:
+            print(f"AVISO: el checkpoint ya alcanzo num_epochs={num_epochs}. "
+                  "No hay nada que entrenar.")
+
+    for epoch in range(start_epoch, num_epochs):
         if unfreezer is not None:
             model.train()                  # re-aplica freeze_bn
             unfreezer.on_epoch_start(epoch)
@@ -586,7 +875,8 @@ def train_pipeline(
             max_windows_per_forward=max_windows_per_forward,
             log_every_n_steps=50,
         )
-        val_loss, val_acc, at_least_one_correct_tot, val_macro_f1, val_macro_f1_fine = validate(
+        (val_loss, val_acc, at_least_one_correct_tot, val_macro_f1,
+         val_macro_f1_fine, val_macro_f1_seg, val_acc_seg) = validate(
             model, val_loader, criterion, device, epoch, num_epochs,
             max_windows_per_forward=max_windows_per_forward,
             num_classes=num_classes,
@@ -597,6 +887,11 @@ def train_pipeline(
         writer.add_scalar("val/accuracy", val_acc, global_step)
         writer.add_scalar("val/at_least_one_correct", at_least_one_correct_tot, global_step)
         writer.add_scalar("val/macro_f1", val_macro_f1, global_step)
+        # Nivel SEGMENTO: la metrica alineada con la unidad de etiquetado,
+        # con la unidad de decision de la aplicacion y con la ponderacion
+        # de la perdida (window bagging).
+        writer.add_scalar("val/macro_f1_segment", val_macro_f1_seg, global_step)
+        writer.add_scalar("val/accuracy_segment", val_acc_seg, global_step)
         if val_macro_f1_fine is not None:
             writer.add_scalar("val/macro_f1_fine", val_macro_f1_fine, global_step)
 
@@ -606,38 +901,75 @@ def train_pipeline(
         improved = val_macro_f1 > best_val_macro_f1
         best_val_macro_f1 = max(best_val_macro_f1, val_macro_f1)
 
+        improved_seg = val_macro_f1_seg > best_val_macro_f1_seg
+        best_val_macro_f1_seg = max(best_val_macro_f1_seg, val_macro_f1_seg)
+
+        print(f"  val macro-F1  window: {val_macro_f1:.4f}"
+              f"   segmento: {val_macro_f1_seg:.4f}"
+              + ("  <- mejor segmento" if improved_seg else ""))
+
+        # Estado que hay que preservar para reanudar exactamente aca.
+        # `epochs_without_improvement` se calcula mas abajo, asi que se usa
+        # el valor que tendra tras esta epoca.
+        _sin_mejora = 0 if improved_seg else epochs_without_improvement + 1
+        estado_mejores = {
+            "best_val_macro_f1": best_val_macro_f1,
+            "best_val_macro_f1_segment": best_val_macro_f1_seg,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+            "epochs_without_improvement": _sin_mejora,
+            "val_macro_f1_window": val_macro_f1,
+            "val_macro_f1_segment": val_macro_f1_seg,
+        }
+        config_ck = {
+            "num_epochs": num_epochs,
+            "lr": lr,
+            "accumulation_steps": accumulation_steps,
+            "label_mode": label_mode,
+            "num_classes": num_classes,
+            "unfreeze_schedule": unfreeze_schedule,
+            "seed": seed,
+        }
+
         if save_checkpoints:
+            ck = _build_checkpoint(
+                model, optimizer, scheduler, generator, epoch, global_step,
+                estado_mejores, config_ck,
+            )
+
+            # checkpoint_last.pth: punto canonico de reanudacion. Se
+            # sobrescribe en cada epoca, asi que siempre refleja el estado
+            # mas reciente sin acumular disco.
+            torch.save(ck, models_dir / "checkpoint_last.pth")
+
+            # DOS checkpoints "best", uno por cada granularidad. El de
+            # segmento es el que corresponde usar; se conserva el de ventana
+            # para no romper la comparabilidad con corridas anteriores.
+            # Los dos maximos NO caen necesariamente en la misma epoca.
+            if improved_seg:
+                torch.save(ck, models_dir / "model_best_segment.pth")
             if improved:
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "global_step": global_step,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "scheduler_state_dict": scheduler.state_dict(),
-                        "best_val_macro_f1": val_macro_f1,
-                    },
-                    models_dir / "model_best.pth"
-                )
+                torch.save(ck, models_dir / "model_best.pth")
+
+            # Historico por epoca (necesario para el barrido de checkpoints).
+            # Sin estado RNG: son ~50 MB cada uno y no se usan para reanudar.
             torch.save(
-                {
-                    "epoch": epoch,
-                    "global_step": global_step,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scheduler_state_dict": scheduler.state_dict(),
-                    "best_val_macro_f1": best_val_macro_f1,
-                },
+                _build_checkpoint(
+                    model, optimizer, scheduler, generator, epoch, global_step,
+                    estado_mejores, config_ck, incluir_rng=False,
+                ),
                 models_dir / f"model_{epoch}.pth"
             )
 
         if trial is not None:
-            trial.report(val_macro_f1, epoch)
+            trial.report(val_macro_f1_seg, epoch)
             if trial.should_prune():
                 writer.close()
                 raise optuna.TrialPruned()
 
-        if improved:
+        # El early stopping sigue la metrica de SEGMENTO, que es la
+        # alineada con el objetivo.
+        if improved_seg:
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
@@ -647,11 +979,13 @@ def train_pipeline(
             and epochs_without_improvement >= early_stopping_patience
         ):
             print(
-                f"Early stopping en �poca {epoch}: sin mejora de val_macro_f1 "
-                f"durante {epochs_without_improvement} �pocas consecutivas "
-                f"(mejor: {best_val_macro_f1:.4f})"
+                f"Early stopping en �poca {epoch}: sin mejora de "
+                f"val_macro_f1_segment durante {epochs_without_improvement} "
+                f"�pocas consecutivas (mejor: {best_val_macro_f1_seg:.4f})"
             )
             break
 
     writer.close()
-    return best_val_macro_f1
+    # Se devuelve la metrica de SEGMENTO: es la que debe optimizar
+    # cualquier busqueda de hiperparametros sobre este pipeline.
+    return best_val_macro_f1_seg

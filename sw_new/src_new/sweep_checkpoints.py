@@ -71,6 +71,10 @@ def main():
     parser.add_argument("--csv-out", default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--label-mode", default=None,
+                        help="esquema de etiquetado usado al entrenar: "
+                             "macro | fine | binary_phone | ternary_clean. "
+                             "Si se omite se infiere del numero de salidas.")
     parser.add_argument("--partition-report", default=None,
                         help="ruta a partition_report.csv. Necesario si alguna "
                              "corrida se entreno con 9 clases finas.")
@@ -94,16 +98,18 @@ def main():
         sd = sd.get("model_state_dict", sd)
         n_out_por_run[run] = infer_model_kwargs(sd)["num_classes"]
 
-    modos = {n: ("fine" if n > len(CLASS_NAMES) else "macro")
-             for n in set(n_out_por_run.values())}
-    if "fine" in modos.values() and args.partition_report is None:
+    if args.label_mode:
+        modos = {n: args.label_mode for n in set(n_out_por_run.values())}
+    else:
+        modos = {n: ("fine" if n > 3 else "macro")
+                 for n in set(n_out_por_run.values())}
+    if any(modo != "macro" for modo in modos.values()) and args.partition_report is None:
         raise SystemExit(
-            "Alguna corrida tiene mas de 3 salidas (entrenada con clases "
-            "finas). Hace falta --partition-report para poder cargar las "
-            "etiquetas finas del dataset.\n"
-            "  Salidas por corrida: "
-            + ", ".join(f"{Path(r).name}={n}" for r, n in n_out_por_run.items())
-        )
+        "El esquema de etiquetado seleccionado requiere "
+        "--partition-report para recuperar la actividad de cada segmento.\n"
+        "  Modos por numero de salidas: "
+        + ", ".join(f"{n}={modo}" for n, modo in modos.items())
+    )
 
     # El dataset y el DataLoader se construyen UNA sola vez POR MODO y se
     # reusan para todos los checkpoints de ese modo. persistent_workers
@@ -117,6 +123,7 @@ def main():
     ])
     loaders = {}       # modo -> DataLoader
     label_groups = None
+    nombres_clase = list(CLASS_NAMES)
     for modo in set(modos.values()):
         ds = SegmentDataset(
             os.path.join(conf.data_dir, args.split),
@@ -124,7 +131,7 @@ def main():
             sample_one_each=conf.sample_one_each,
             transform=transform,
             label_mode=modo,
-            partition_report=args.partition_report if modo == "fine" else None,
+            partition_report=args.partition_report if modo != "macro" else None,
         )
         loaders[modo] = DataLoader(
             ds, batch_size=1, shuffle=False,
@@ -133,6 +140,9 @@ def main():
         )
         if modo == "fine":
             label_groups = ds.label_groups
+        # Nombres del esquema, para rotular las matrices correctamente
+        # (en el binario son ['safe', 'phone'], no las macro-clases).
+        nombres_clase = list(getattr(ds, "class_names", CLASS_NAMES))
         print(f"Split: {args.split}  ({len(ds)} segmentos, modo {modo})")
     print()
 
@@ -154,7 +164,7 @@ def main():
         num_classes = inferido.pop("num_classes")
         model = get_model(num_classes, **inferido).to(args.device)
 
-        modo = "fine" if num_classes > len(CLASS_NAMES) else "macro"
+        modo = args.label_mode or ("fine" if num_classes > 3 else "macro")
         loader = loaders[modo]
         grupos = label_groups if modo == "fine" else None
 
@@ -260,7 +270,8 @@ def main():
     if args.full_report:
         for n, filas in resultados.items():
             mejor = max(filas, key=lambda f: f[2])
-            print(format_report(mejor[4], f"{n} - epoca {mejor[0]} - NIVEL SEGMENTO"))
+            print(format_report(mejor[4], f"{n} - epoca {mejor[0]} - NIVEL SEGMENTO",
+                                nombres_clase))
 
     # -----------------------------------------------------------------
     # CSV

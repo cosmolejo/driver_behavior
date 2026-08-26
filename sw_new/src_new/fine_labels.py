@@ -210,3 +210,107 @@ def select_subjects(csv_path: str, n: int, split: str = "TRAIN",
             orden.append(por_grupo[g].pop())
         i += 1
     return sorted(orden[:n])
+
+
+# ---------------------------------------------------------------------
+# Esquemas de etiquetado
+# ---------------------------------------------------------------------
+# Un esquema define QUE actividades entran y a que indice de clase van.
+# Las actividades ausentes del mapa se EXCLUYEN del dataset.
+#
+# Motivacion del esquema binario: `unsafe` agrupa 6 actividades con
+# duraciones medianas de 28 a 1014 frames y apariencias muy distintas
+# (hablar con el pasajero, textear, llamar, manipular la radio). Aislar
+# un subconjunto visualmente coherente -uso de telefono- convierte la
+# tarea en un problema mucho mejor definido.
+#
+# Nota: el desbalance se INVIERTE segun la unidad de conteo. En TRAIN,
+# safe:phone es 3.26:1 por segmento pero 0.97:1 por ventana, porque las
+# llamadas duran ~1000 frames contra 148 de safe_drive. Con window
+# bagging la perdida ve la proporcion por SEGMENTO.
+
+PHONE_ACTIVITIES = [
+    "texting_left", "texting_right", "phonecall_left", "phonecall_right",
+]
+
+LABEL_SCHEMES = {
+    # 2 clases: conduccion normal vs uso de telefono.
+    # Excluye reach_side, reach_backseat, talking_to_passenger y radio.
+    "binary_phone": {
+        "map": {"safe_drive": 0, **{a: 1 for a in PHONE_ACTIVITIES}},
+        "names": ["safe", "phone"],
+    },
+    # 2 clases: conduccion normal vs gestos de alcance.
+    # Excluye las 6 actividades de `unsafe`.
+    #
+    # A diferencia de binary_phone, aca el desbalance por SEGMENTO es casi
+    # perfecto (1.11:1) pero por VENTANA llega a 4.07:1, porque reach_side
+    # dura 62 frames de mediana contra 148 de safe_drive. Es el caso
+    # opuesto al binario de telefono y una buena ilustracion de por que la
+    # unidad de conteo importa.
+    #
+    # `reach_backseat` aporta solo el 3.6% de la clase (65 segmentos en
+    # train): en la practica el modelo aprende sobre todo `reach_side`.
+    "binary_reaching": {
+        "map": {"safe_drive": 0, "reach_side": 1, "reach_backseat": 1},
+        "names": ["safe", "reaching"],
+    },
+    # 3 clases pero solo con las actividades coherentes: separa el uso de
+    # telefono de los gestos de alcance, descartando las ambiguas
+    # (talking_to_passenger, radio).
+    "ternary_clean": {
+        "map": {"safe_drive": 0, "reach_side": 1, "reach_backseat": 1,
+                **{a: 2 for a in PHONE_ACTIVITIES}},
+        "names": ["safe", "reaching", "phone"],
+    },
+}
+
+
+def get_scheme(name: str, csv_path: Optional[str] = None):
+    """
+    Devuelve (activity_map, class_names) para un esquema.
+
+    - "macro": None, se usa el nombre de carpeta (comportamiento historico)
+    - "fine" : las 9 actividades, mapa derivado del CSV
+    - resto  : definido en LABEL_SCHEMES
+    """
+    if name == "macro":
+        return None, list(MACRO_CLASSES)
+    if name == "fine":
+        if csv_path is None:
+            raise ValueError("el esquema 'fine' requiere partition_report")
+        idx = build_fine_class_to_idx(csv_path)
+        return dict(idx), [a for a, _ in sorted(idx.items(), key=lambda kv: kv[1])]
+    if name in LABEL_SCHEMES:
+        e = LABEL_SCHEMES[name]
+        return dict(e["map"]), list(e["names"])
+    raise ValueError(
+        f"esquema desconocido: {name!r}. "
+        f"Opciones: 'macro', 'fine', {list(LABEL_SCHEMES)}"
+    )
+
+
+def scheme_summary(name: str, csv_path: str) -> str:
+    amap, names = get_scheme(name, csv_path)
+    filas = _read_partition_report(csv_path)
+    out = [f"Esquema '{name}': {len(names)} clases -> {names}"]
+    if amap is None:
+        out.append("  (etiquetas tomadas del nombre de carpeta)")
+        return "\n".join(out)
+
+    conteo = {}
+    for f in filas:
+        a = f["activity"]
+        if a in amap:
+            conteo.setdefault(a, {}).setdefault(f["split"], 0)
+            conteo[a][f["split"]] += 1
+    excluidas = sorted({f["activity"] for f in filas} - set(amap))
+
+    out.append(f"  {'actividad':<24}{'clase':<10}{'TRAIN':>7}{'VAL':>6}{'TEST':>6}")
+    for a in sorted(amap, key=lambda x: (amap[x], x)):
+        c = conteo.get(a, {})
+        out.append(f"  {a:<24}{names[amap[a]]:<10}"
+                   f"{c.get('TRAIN',0):>7}{c.get('VALIDATION',0):>6}{c.get('TEST',0):>6}")
+    if excluidas:
+        out.append(f"  EXCLUIDAS: {excluidas}")
+    return "\n".join(out)

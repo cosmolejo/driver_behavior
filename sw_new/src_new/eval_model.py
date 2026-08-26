@@ -56,6 +56,9 @@ from torch.utils.data import DataLoader
 #     clase 2: 169 seg, 294.6 fr          -> 34.00 win/seg
 CLASS_NAMES = ["reaching", "safe", "unsafe"]
 
+# Nombres de las macro-clases a las que agrega el esquema "fine".
+MACRO_NAMES_FINE = ["reaching", "safe", "unsafe"]
+
 
 # ---------------------------------------------------------------------
 # M�tricas (implementadas a mano, sin sklearn, igual que en trainer.py)
@@ -121,9 +124,10 @@ def trivial_macro_f1(cm: np.ndarray) -> tuple:
     return float(f1_majority / cm.shape[0]), majority
 
 
-def format_report(cm: np.ndarray, title: str) -> str:
+def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
     num_classes = cm.shape[0]
-    names = (CLASS_NAMES + [f"class_{i}" for i in range(num_classes)])[:num_classes]
+    base = list(class_names) if class_names else CLASS_NAMES
+    names = (base + [f"class_{i}" for i in range(num_classes)])[:num_classes]
     metrics = per_class_metrics(cm)
     macro_f1 = sum(m["f1"] for m in metrics) / num_classes
     accuracy = np.trace(cm) / cm.sum() if cm.sum() > 0 else 0.0
@@ -313,6 +317,10 @@ def main():
         "--split", default="VALIDATION", choices=["TRAIN", "VALIDATION", "TEST"]
     )
     parser.add_argument("--csv-out", default=None, help="opcional: guarda metricas por clase")
+    parser.add_argument("--label-mode", default=None,
+                        help="esquema de etiquetado usado al entrenar: "
+                             "macro | fine | binary_phone | ternary_clean. "
+                             "Si se omite se infiere del numero de salidas.")
     parser.add_argument("--partition-report", default=None,
                         help="ruta a partition_report.csv. Necesario si el "
                              "checkpoint se entreno con 9 clases finas.")
@@ -351,12 +359,14 @@ def main():
                              std=[0.229, 0.224, 0.225]),
     ])
 
-    modo = "fine" if num_classes > len(CLASS_NAMES) else "macro"
-    if modo == "fine" and args.partition_report is None:
+    # El esquema explicito manda; si no se pasa, se infiere del numero de
+    # salidas (solo distingue macro de fine, no los esquemas con mapa propio).
+    modo = args.label_mode or ("fine" if num_classes > 3 else "macro")
+    if modo != "macro" and args.partition_report is None:
         raise SystemExit(
-            f"El checkpoint tiene {num_classes} salidas (clases finas). "
-            "Hace falta --partition-report para cargar las etiquetas finas."
-        )
+        f"El esquema {modo!r} requiere --partition-report para "
+        "recuperar la actividad de cada segmento."
+    )
 
     dataset = SegmentDataset(
         os.path.join(conf.data_dir, args.split),
@@ -364,7 +374,7 @@ def main():
         sample_one_each=conf.sample_one_each,
         transform=transform,
         label_mode=modo,
-        partition_report=args.partition_report if modo == "fine" else None,
+        partition_report=args.partition_report if modo != "macro" else None,
     )
     loader = DataLoader(
         dataset,
@@ -380,18 +390,23 @@ def main():
         print(f"AVISO al cargar pesos -> faltantes: {missing} | inesperados: {unexpected}")
 
     grupos = dataset.label_groups if modo == "fine" else None
+    # Nombres de clase del esquema, para que las matrices salgan rotuladas
+    # correctamente (en el esquema binario son ['safe', 'phone']).
+    class_names = list(getattr(dataset, "class_names", CLASS_NAMES))
     cm_window, cm_segment = evaluate(
         model, loader, args.device, num_classes, conf.max_windows_per_forward,
         label_groups=grupos,
     )
     if modo == "fine":
-        num_classes = len(CLASS_NAMES)   # las matrices ya vienen agregadas
+        # Las matrices ya vienen agregadas a las macro-clases
+        num_classes = len(MACRO_NAMES_FINE)
+        class_names = list(MACRO_NAMES_FINE)
 
-    print(format_report(cm_window, f"NIVEL WINDOW  ({args.split})"))
-    print(format_report(cm_segment, f"NIVEL SEGMENTO  ({args.split})"))
+    print(format_report(cm_window, f"NIVEL WINDOW  ({args.split})", class_names))
+    print(format_report(cm_segment, f"NIVEL SEGMENTO  ({args.split})", class_names))
 
     if args.csv_out:
-        names = (CLASS_NAMES + [f"class_{i}" for i in range(num_classes)])[:num_classes]
+        names = (class_names + [f"class_{i}" for i in range(num_classes)])[:num_classes]
         rows = ["nivel,clase,precision,recall,f1,support"]
         for nivel, cm in (("window", cm_window), ("segmento", cm_segment)):
             for m, n in zip(per_class_metrics(cm), names):

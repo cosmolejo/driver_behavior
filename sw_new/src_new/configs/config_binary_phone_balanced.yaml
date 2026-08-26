@@ -1,0 +1,81 @@
+data_dir: /home/agomez/Documents/dmd_user_split
+partition_report: //home/agomez/Documents/dmd_user_split/partition_report.csv  # AJUSTAR
+num_classes: 2
+sequence_length: 32
+sample_one_each: 2
+
+accumulation_steps: 4
+max_windows_per_forward: 8
+
+# =====================================================================
+# BINARIO safe vs telefono, CON BALANCE EXACTO DE CLASES
+#
+# Estado sin balancear (TRAIN):
+#     safe   2011 segmentos   42.004 ventanas
+#     phone   616 segmentos   43.383 ventanas
+#     ratio: 3.26:1 por segmento, 0.97:1 por ventana
+#
+# Las dos unidades estan en TENSION y no se pueden igualar a la vez sin
+# tocar las ventanas: un segmento de safe da ~21 ventanas y uno de phone
+# ~70. Igualar segmentos deja las ventanas 0.30:1; igualar ventanas deja
+# los segmentos 3.26:1.
+#
+# `windows_per_segment: 20` lo resuelve: descarta los segmentos con menos
+# de 20 ventanas y de los restantes toma EXACTAMENTE 20, equiespaciadas
+# a lo largo del segmento (no las 20 primeras, para no sesgar hacia el
+# arranque). Combinado con balance_classes:
+#
+#     RESULTADO: 473 segmentos y 9.460 ventanas POR CLASE (exacto)
+#                21/21 sujetos presentes en ambas clases
+#
+# COSTO: quedan 946 de 2.627 segmentos (36%). Corrida de ~0.9 h.
+#
+# El submuestreo de la clase mayoritaria es round-robin entre sujetos, de
+# modo que ninguno desaparece y se acota el peso de los que mas aportan.
+#
+# El balanceo se aplica SOLO A TRAIN. Validacion y test conservan su
+# distribucion real: balancearlos cambiaria el piso trivial y la metrica
+# dejaria de reflejar el escenario de despliegue.
+#   piso trivial val (sin balancear) = 0.4340
+# =====================================================================
+
+label_mode: binary_phone
+# balance_classes: true
+balance_unit: window
+windows_per_segment: 20
+
+num_epochs: 12
+loss_fn: cross_entropy
+
+lr: 3e-4
+weight_decay: 1e-4
+pct_start: 0.1
+div_factor: 25
+
+model_kwargs:
+  hidden_dim: 256
+  lstm_layers: 2
+  dropout: 0.3
+  freeze_backbone: true
+  freeze_bn: true
+
+unfreeze_schedule: {0: 10}
+unfreeze_lr_decay: 0.3
+
+seed: 42
+augment: null
+subject_subset: null
+
+run_name: binary_phone_balanced
+save_checkpoints: true
+early_stopping_patience: null
+grad_clip: null
+
+optuna:
+  study_name: driver_behavior_search_macrof1
+  storage: sqlite:///optuna_study.db
+  n_trials: 25
+  search_epochs: 12
+  final_epochs: 50
+  pruner_min_resource: 3
+  pruner_reduction_factor: 3
