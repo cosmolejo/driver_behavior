@@ -443,3 +443,6 @@ sw_new/src_new/logs/weekend/lad04_seed123.done
 sw_new/src_new/logs/weekend/lad08_blocks8.done
 sw_new/src_new/logs/weekend/lad17_clip.done
 .gitignore
+sw_new/src_new/__pycache__/*
+sw_new/src_new/__pycache__/dataset.cpython-312.pyc
+sw_new/src_new/__pycache__/trainer.cpython-312.pyc

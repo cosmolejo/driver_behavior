@@ -40,9 +40,9 @@ max_windows_per_forward: 8
 # =====================================================================
 
 label_mode: binary_phone
-# balance_classes: true
+
 balance_unit: window
-windows_per_segment: 20
+#windows_per_segment: 20
 
 num_epochs: 12
 loss_fn: cross_entropy
@@ -63,7 +63,7 @@ unfreeze_schedule: {0: 10}
 unfreeze_lr_decay: 0.3
 
 seed: 42
-augment: null
+augment: both
 subject_subset: null
 
 run_name: binary_phone_balanced

@@ -400,8 +400,10 @@ class SegmentDataset(Dataset):
         rnd = _random.Random(self.balance_seed)
         K = self.windows_per_segment
 
-        # --- 1. Tope de ventanas por segmento (solo modo "both") ---
-        if K is not None:
+        # --- 1. Tope de ventanas por segmento (SOLO modo "both") ---
+        # En modo "window" se deben conservar todos los segmentos; por eso
+        # windows_per_segment no puede recortar/descartar segmentos aqui.
+        if self.balance_unit == "both":
             recortados, descartados = [], 0
             for video_path, label, starts, window_len in self.segments:
                 if len(starts) < K:
@@ -566,7 +568,7 @@ class SegmentDataset(Dataset):
                 [self.normalize(w) for w in windows_tensor], dim=0
             )
 
-        # (session_name, segment_name)  �til para debug/logging
+        # (session_name, segment_name)  �til para debug/logging
         name = Path(video_path).parts[-3:-1]
         return windows_tensor, torch.tensor(label, dtype=torch.long), name
 
