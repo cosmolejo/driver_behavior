@@ -1,5 +1,5 @@
 """
-Evaluaci�n detallada de un checkpoint: matriz de confusi�n, precision /
+Evaluación detallada de un checkpoint: matriz de confusión, precision /
 recall / F1 por clase, y macro-F1, a nivel WINDOW y a nivel SEGMENTO.
 
 Objetivo principal
@@ -9,13 +9,13 @@ significan cosas muy distintas:
 
   (a) COLAPSO: el modelo predice casi todo como la clase mayoritaria.
       El macro-F1 se pega al "piso trivial" y las minoritarias tienen
-      recall ~0. El modelo no aprendi� nada �til sobre ellas.
+      recall ~0. El modelo no aprendió nada útil sobre ellas.
 
   (b) Performance pobre pero REAL: el modelo distingue las tres clases,
       solo que con muchos errores. Recall > 0 en las minoritarias.
 
-El script imprime el piso trivial calculado sobre la distribuci�n real
-del split para que la comparaci�n sea directa.
+El script imprime el piso trivial calculado sobre la distribución real
+del split para que la comparación sea directa.
 
 Uso
 ---
@@ -24,7 +24,7 @@ Uso
     python eval_model.py --checkpoint ... --csv-out resultados.csv
 
 La arquitectura (hidden_dim, lstm_layers, num_classes) se infiere del
-state_dict del checkpoint, as� que no hace falta pasar los hiperpar�metros
+state_dict del checkpoint, así que no hace falta pasar los hiperparámetros
 del trial a mano ni arriesgar un mismatch silencioso.
 """
 import argparse
@@ -61,13 +61,13 @@ MACRO_NAMES_FINE = ["reaching", "safe", "unsafe"]
 
 
 # ---------------------------------------------------------------------
-# M�tricas (implementadas a mano, sin sklearn, igual que en trainer.py)
+# Métricas (implementadas a mano, sin sklearn, igual que en trainer.py)
 # ---------------------------------------------------------------------
 def confusion_matrix(preds: np.ndarray, labels: np.ndarray, num_classes: int) -> np.ndarray:
     """
     Devuelve una matriz (num_classes, num_classes) donde
     cm[i, j] = cantidad de muestras con label real i predichas como j.
-    Filas = verdad, columnas = predicci�n.
+    Filas = verdad, columnas = predicción.
     """
     cm = np.zeros((num_classes, num_classes), dtype=np.int64)
     for t, p in zip(labels, preds):
@@ -78,7 +78,7 @@ def confusion_matrix(preds: np.ndarray, labels: np.ndarray, num_classes: int) ->
 def per_class_metrics(cm: np.ndarray):
     """
     Deriva precision / recall / F1 / support por clase desde la matriz de
-    confusi�n. Divisiones por cero -> 0.0 (equivalente a zero_division=0).
+    confusión. Divisiones por cero -> 0.0 (equivalente a zero_division=0).
     """
     num_classes = cm.shape[0]
     out = []
@@ -117,7 +117,7 @@ def trivial_macro_f1(cm: np.ndarray) -> tuple:
     total = support.sum()
     majority = int(np.argmax(support))
 
-    # Para la clase mayoritaria: recall=1, precision=proporci�n de esa clase
+    # Para la clase mayoritaria: recall=1, precision=proporción de esa clase
     p = support[majority] / total
     f1_majority = 2 * p / (1 + p) if p > 0 else 0.0
     # El resto de las clases: F1 = 0
@@ -139,7 +139,7 @@ def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
     lines.append(f" {title}")
     lines.append("=" * 72)
 
-    # --- Matriz de confusi�n (conteos) ---
+    # --- Matriz de confusión (conteos) ---
     lines.append("")
     lines.append("Matriz de confusion (filas = REAL, columnas = PREDICHO):")
     lines.append("")
@@ -162,7 +162,7 @@ def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
             row_vals = [f"{cm[i, j] / total_row:.3f}" for j in range(num_classes)]
         lines.append(f"{n:>12}  " + "".join(f"{v:>12}" for v in row_vals))
 
-    # --- M�tricas por clase ---
+    # --- Métricas por clase ---
     lines.append("")
     lines.append(f"{'clase':>12}{'precision':>12}{'recall':>12}{'f1':>12}{'support':>12}")
     lines.append("-" * 60)
@@ -180,7 +180,7 @@ def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
     delta = macro_f1 - floor
     lines.append(f"  margen vs piso  : {delta:+.4f}")
 
-    # --- Diagn�stico autom�tico de colapso ---
+    # --- Diagnóstico automático de colapso ---
     minority = [i for i in range(num_classes) if i != majority]
     recalls_min = [metrics[i]["recall"] for i in minority]
     pred_counts = cm.sum(axis=0)
@@ -197,7 +197,7 @@ def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
         lines.append("    El modelo no esta aprendiendo las minoritarias.")
     elif delta <= 0.01:
         lines.append("  - El macro-F1 no supera el piso trivial de forma significativa.")
-        lines.append("    Hay algo de se�al en las minoritarias, pero no alcanza.")
+        lines.append("    Hay algo de señal en las minoritarias, pero no alcanza.")
     else:
         lines.append("  - NO hay colapso: el modelo supera el piso trivial y tiene")
         lines.append("    recall no trivial en al menos una clase minoritaria.")
@@ -213,7 +213,7 @@ def format_report(cm: np.ndarray, title: str, class_names=None) -> str:
 def infer_model_kwargs(state_dict: dict) -> dict:
     """
     Deduce hidden_dim, lstm_layers y num_classes del state_dict, para no
-    depender de que el usuario recuerde los hiperpar�metros del trial.
+    depender de que el usuario recuerde los hiperparámetros del trial.
     (dropout y freeze_backbone no afectan la evaluacion en model.eval()).
     """
     # LSTM bidireccional: weight_ih_l{i} tiene shape (4*hidden, input)
@@ -240,7 +240,7 @@ def infer_model_kwargs(state_dict: dict) -> dict:
 
 
 # ---------------------------------------------------------------------
-# Evaluaci�n
+# Evaluación
 # ---------------------------------------------------------------------
 @torch.no_grad()
 def evaluate(model, dataloader, device, num_classes, max_windows_per_forward,
@@ -330,7 +330,7 @@ def main():
 
     conf = OmegaConf.load(args.config)
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu")
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
     inferred = infer_model_kwargs(state_dict)
 
@@ -362,11 +362,11 @@ def main():
     # El esquema explicito manda; si no se pasa, se infiere del numero de
     # salidas (solo distingue macro de fine, no los esquemas con mapa propio).
     modo = args.label_mode or ("fine" if num_classes > 3 else "macro")
-    if modo != "macro" and args.partition_report is None:
+    if modo == "fine" and args.partition_report is None:
         raise SystemExit(
-        f"El esquema {modo!r} requiere --partition-report para "
-        "recuperar la actividad de cada segmento."
-    )
+            f"El checkpoint tiene {num_classes} salidas (clases finas). "
+            "Hace falta --partition-report para cargar las etiquetas finas."
+        )
 
     dataset = SegmentDataset(
         os.path.join(conf.data_dir, args.split),
@@ -374,7 +374,7 @@ def main():
         sample_one_each=conf.sample_one_each,
         transform=transform,
         label_mode=modo,
-        partition_report=args.partition_report if modo != "macro" else None,
+        partition_report=args.partition_report if modo == "fine" else None,
     )
     loader = DataLoader(
         dataset,
