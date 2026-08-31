@@ -23,6 +23,14 @@ Latencia end-to-end PyTorch:
         --mode latency \
         --samples 500
 
+Video usando directamente el modelo ExecuTorch .pte:
+
+    python demo.py \
+        --config configs/config_binary_phone_balanced.yaml \
+        --pte model_binary_phone.pte \
+        --video /ruta/video.mp4 \
+        --mode pte_video
+
 Latencia del .pte con ExecuTorch:
 
     python demo.py \
@@ -45,7 +53,11 @@ import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from predictors.base_predictor import Predictor
+from predictors.base_predictor import (
+    ClipPreprocessor,
+    Predictor,
+    resolve_class_names,
+)
 
 
 DEFAULT_INPUT_SIZE = 112
@@ -69,7 +81,7 @@ def parse_args():
     parser.add_argument(
         "--video",
         default=None,
-        help="Ruta al video para modos video/latency.",
+        help="Ruta al video para modos video/latency/pte_video.",
     )
     parser.add_argument(
         "--mode",
@@ -77,13 +89,14 @@ def parse_args():
         choices=[
             "video",
             "latency",
+            "pte_video",
             "executor_latency",
         ],
     )
     parser.add_argument(
         "--pte",
         default=None,
-        help="Modelo ExecuTorch .pte para executor_latency.",
+        help="Modelo ExecuTorch .pte para pte_video/executor_latency.",
     )
     parser.add_argument(
         "--samples",
@@ -146,29 +159,129 @@ def validate_args(args):
             raise ValueError(
                 f"--checkpoint es obligatorio para mode={args.mode}."
             )
-        if args.video is None:
-            raise ValueError(
-                f"--video es obligatorio para mode={args.mode}."
-            )
         if not Path(args.checkpoint).exists():
             raise FileNotFoundError(
                 f"No existe el checkpoint: {args.checkpoint}"
+            )
+
+    if args.mode in ("video", "latency", "pte_video"):
+        if args.video is None:
+            raise ValueError(
+                f"--video es obligatorio para mode={args.mode}."
             )
         if not Path(args.video).exists():
             raise FileNotFoundError(
                 f"No existe el video: {args.video}"
             )
 
-    if args.mode == "executor_latency":
+    if args.mode in ("pte_video", "executor_latency"):
         if args.pte is None:
             raise ValueError(
-                "--pte es obligatorio para mode=executor_latency."
+                f"--pte es obligatorio para mode={args.mode}."
             )
         if not Path(args.pte).exists():
             raise FileNotFoundError(
                 f"No existe el modelo .pte: {args.pte}"
             )
 
+
+
+class ExecuTorchPredictor:
+    """
+    Predictor de video que usa directamente un archivo .pte.
+
+    El preprocesamiento es exactamente el mismo que usa Predictor
+    para el checkpoint PyTorch.
+    """
+
+    def __init__(self, pte_path: str, config):
+        from executorch.runtime import Runtime
+
+        self.cfg = config
+        self.pte_path = Path(pte_path)
+        self.preprocessor = ClipPreprocessor(config)
+
+        self.sequence_length = self.preprocessor.sequence_length
+        self.sample_one_each = self.preprocessor.sample_one_each
+        self.frames_per_window = self.preprocessor.frames_per_window
+        self.input_size = self.preprocessor.input_size
+
+        runtime = Runtime.get()
+        self.program = runtime.load_program(str(self.pte_path))
+        self.method = self.program.load_method("forward")
+
+        self.class_names = None
+
+        print("ExecuTorch predictor inicializado")
+        print("--------------------------------")
+        print(f"Modelo .pte       : {self.pte_path}")
+        print(f"sequence_length   : {self.sequence_length}")
+        print(f"sample_one_each   : {self.sample_one_each}")
+        print(f"frames al modelo  : {self.frames_per_window}")
+        print(
+            f"Input esperado    : "
+            f"(1, 3, {self.frames_per_window}, "
+            f"{self.input_size}, {self.input_size})"
+        )
+
+    def preprocess(self, raw_frames: np.ndarray) -> torch.Tensor:
+        # XNNPACK/ExecuTorch CPU espera un tensor float32 contiguo.
+        return self.preprocessor(raw_frames).to(
+            dtype=torch.float32,
+            device="cpu",
+        ).contiguous()
+
+    def predict_with_confidence(
+        self,
+        raw_frames: np.ndarray,
+    ):
+        input_tensor = self.preprocess(raw_frames)
+
+        outputs = self.method.execute([input_tensor])
+
+        if not outputs:
+            raise RuntimeError(
+                "ExecuTorch no devolvió ninguna salida."
+            )
+
+        logits = outputs[0]
+
+        if not isinstance(logits, torch.Tensor):
+            logits = torch.as_tensor(logits)
+
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(0)
+
+        if self.class_names is None:
+            num_classes = int(logits.shape[-1])
+            self.class_names = resolve_class_names(
+                self.cfg,
+                num_classes,
+            )
+            print(f"Clases            : {self.class_names}")
+
+        probabilities = torch.softmax(logits, dim=-1)
+
+        pred_idx = int(probabilities.argmax(dim=-1).item())
+        confidence = float(
+            probabilities[0, pred_idx].item()
+        )
+
+        label = (
+            self.class_names[pred_idx]
+            if pred_idx < len(self.class_names)
+            else f"class_{pred_idx}"
+        )
+
+        return (
+            label,
+            confidence,
+            probabilities[0].cpu().numpy(),
+        )
+
+    def predict(self, raw_frames: np.ndarray) -> str:
+        label, _, _ = self.predict_with_confidence(raw_frames)
+        return label
 
 def open_video(video_path: str):
     cap = cv.VideoCapture(video_path)
@@ -211,7 +324,7 @@ def run_video(
     fps,
     width,
     height,
-    predictor: Predictor,
+    predictor,
     output_path: str,
     inference_every: int = 1,
     display: bool = True,
@@ -450,6 +563,32 @@ def main():
         )
         return
 
+    if args.mode == "pte_video":
+        predictor = ExecuTorchPredictor(
+            pte_path=args.pte,
+            config=cfg,
+        )
+
+        cap, fps, width, height = open_video(args.video)
+
+        try:
+            print("Running ExecuTorch video demo")
+            run_video(
+                cap=cap,
+                fps=fps,
+                width=width,
+                height=height,
+                predictor=predictor,
+                output_path=args.output,
+                inference_every=args.inference_every,
+                display=not args.no_display,
+            )
+        finally:
+            cap.release()
+            cv.destroyAllWindows()
+
+        return
+
     predictor = Predictor(
         checkpoint_path=args.checkpoint,
         config=cfg,
@@ -460,7 +599,7 @@ def main():
 
     try:
         if args.mode == "video":
-            print("Running video demo")
+            print("Running PyTorch video demo")
             run_video(
                 cap=cap,
                 fps=fps,

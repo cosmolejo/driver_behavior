@@ -140,6 +140,75 @@ def resolve_class_names(cfg: DictConfig, num_classes: int) -> list[str]:
     return [f"class_{i}" for i in range(num_classes)]
 
 
+class ClipPreprocessor:
+    """
+    Preprocesamiento temporal y espacial compartido por PyTorch y ExecuTorch.
+
+    Entrada:
+        (sequence_length, H, W, 3), frames OpenCV en BGR.
+
+    Salida:
+        (1, C, T, H, W), float32 normalizado.
+    """
+
+    def __init__(self, config: DictConfig):
+        self.cfg = config
+        self.sequence_length = int(self.cfg.sequence_length)
+        self.sample_one_each = max(1, int(self.cfg.sample_one_each))
+        self.frames_per_window = max(
+            1,
+            math.ceil(self.sequence_length / self.sample_one_each),
+        )
+        self.input_size = int(
+            self.cfg.get("input_size", DEFAULT_INPUT_SIZE)
+        )
+
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((self.input_size, self.input_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=IMAGENET_MEAN,
+                std=IMAGENET_STD,
+            ),
+        ])
+
+    def select_temporal_frames(
+        self,
+        raw_frames: np.ndarray,
+    ) -> np.ndarray:
+        if len(raw_frames) < self.sequence_length:
+            raise ValueError(
+                "Buffer temporal incompleto: "
+                f"se recibieron {len(raw_frames)} frames, "
+                f"se necesitan {self.sequence_length}."
+            )
+
+        raw_frames = raw_frames[-self.sequence_length:]
+
+        last = len(raw_frames) - 1
+        indices = [
+            min(i * self.sample_one_each, last)
+            for i in range(self.frames_per_window)
+        ]
+
+        return raw_frames[indices]
+
+    def __call__(self, raw_frames: np.ndarray) -> torch.Tensor:
+        sampled_frames = self.select_temporal_frames(raw_frames)
+
+        frames = []
+        for frame_bgr in sampled_frames:
+            frame_rgb = cv2.cvtColor(
+                frame_bgr,
+                cv2.COLOR_BGR2RGB,
+            )
+            frames.append(self.transform(frame_rgb))
+
+        clip = torch.stack(frames, dim=1)
+        return clip.unsqueeze(0).contiguous()
+
+
 class Predictor:
     def __init__(
         self,
@@ -167,27 +236,13 @@ class Predictor:
                 f"No existe el checkpoint: {self.checkpoint_path}"
             )
 
-        self.sequence_length = int(self.cfg.sequence_length)
-        self.sample_one_each = max(1, int(self.cfg.sample_one_each))
-        self.frames_per_window = max(
-            1,
-            math.ceil(self.sequence_length / self.sample_one_each),
-        )
-        self.input_size = int(
-            self.cfg.get("input_size", DEFAULT_INPUT_SIZE)
-        )
+        self.preprocessor = ClipPreprocessor(self.cfg)
+        self.sequence_length = self.preprocessor.sequence_length
+        self.sample_one_each = self.preprocessor.sample_one_each
+        self.frames_per_window = self.preprocessor.frames_per_window
+        self.input_size = self.preprocessor.input_size
 
         self.device = self._resolve_device(device)
-
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((self.input_size, self.input_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=IMAGENET_MEAN,
-                std=IMAGENET_STD,
-            ),
-        ])
 
         self.model, self.num_classes = self._load_model()
         self.class_names = resolve_class_names(
@@ -313,68 +368,8 @@ class Predictor:
 
         return model, num_classes
 
-    def _select_temporal_frames(
-        self,
-        raw_frames: np.ndarray,
-    ) -> np.ndarray:
-        """
-        Reproduce `_window_indices()` del SegmentDataset.
-
-        El buffer mantiene `sequence_length` frames crudos. Después se
-        seleccionan `frames_per_window` frames separados por
-        `sample_one_each`.
-
-        Ejemplo actual:
-            sequence_length=32
-            sample_one_each=2
-            -> índices 0, 2, 4, ..., 30
-            -> 16 frames al modelo.
-        """
-        if len(raw_frames) < self.sequence_length:
-            raise ValueError(
-                "Buffer temporal incompleto: "
-                f"se recibieron {len(raw_frames)} frames, "
-                f"se necesitan {self.sequence_length}."
-            )
-
-        # Si llega un buffer más grande, usamos la ventana más reciente.
-        raw_frames = raw_frames[-self.sequence_length:]
-
-        last = len(raw_frames) - 1
-        indices = [
-            min(i * self.sample_one_each, last)
-            for i in range(self.frames_per_window)
-        ]
-
-        return raw_frames[indices]
-
     def preprocess(self, raw_frames: np.ndarray) -> torch.Tensor:
-        """
-        Convierte frames OpenCV BGR al tensor usado durante entrenamiento.
-
-        Entrada:
-            (sequence_length, H, W, 3), BGR uint8
-
-        Salida:
-            (1, C, T, H, W), float32 normalizado
-        """
-        sampled_frames = self._select_temporal_frames(raw_frames)
-
-        frames = []
-        for frame_bgr in sampled_frames:
-            frame_rgb = cv2.cvtColor(
-                frame_bgr,
-                cv2.COLOR_BGR2RGB,
-            )
-            frames.append(self.transform(frame_rgb))
-
-        # Cada frame es (C, H, W). Se apilan sobre T:
-        # (C, T, H, W), igual que SegmentDataset._load_window().
-        clip = torch.stack(frames, dim=1)
-
-        # Batch:
-        # (1, C, T, H, W)
-        return clip.unsqueeze(0)
+        return self.preprocessor(raw_frames)
 
     @torch.no_grad()
     def predict_with_confidence(
