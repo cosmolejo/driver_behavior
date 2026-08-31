@@ -103,11 +103,12 @@ def main():
     else:
         modos = {n: ("fine" if n > 3 else "macro")
                  for n in set(n_out_por_run.values())}
-    if "fine" in modos.values() and args.partition_report is None:
+    # Cualquier esquema que no sea "macro" resuelve la etiqueta desde el
+    # CSV: las actividades de grano fino no estan en el arbol de carpetas.
+    if any(m != "macro" for m in modos.values()) and args.partition_report is None:
         raise SystemExit(
-            "Alguna corrida tiene mas de 3 salidas (entrenada con clases "
-            "finas). Hace falta --partition-report para poder cargar las "
-            "etiquetas finas del dataset.\n"
+            f"El esquema de etiquetado ({sorted(set(modos.values()))}) necesita "
+            "--partition-report para resolver las actividades del CSV.\n"
             "  Salidas por corrida: "
             + ", ".join(f"{Path(r).name}={n}" for r, n in n_out_por_run.items())
         )
@@ -132,7 +133,7 @@ def main():
             sample_one_each=conf.sample_one_each,
             transform=transform,
             label_mode=modo,
-            partition_report=args.partition_report if modo == "fine" else None,
+            partition_report=args.partition_report if modo != "macro" else None,
         )
         loaders[modo] = DataLoader(
             ds, batch_size=1, shuffle=False,

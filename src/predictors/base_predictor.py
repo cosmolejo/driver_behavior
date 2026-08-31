@@ -60,7 +60,7 @@ class Predictor:
         # )
 
         frames_np = np.stack([
-            cv2.resize(f, (224, 224))
+            cv2.resize(f, (112, 112))
             for f in raw_data
         ])  # (T, 224, 224, 3) uint8
         source_video = torch.from_numpy(frames_np).permute(0, 3, 1, 2).float().div_(255.0)
