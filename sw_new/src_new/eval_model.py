@@ -330,7 +330,7 @@ def main():
 
     conf = OmegaConf.load(args.config)
 
-    ckpt = torch.load(args.checkpoint, map_location="cpu")
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
     inferred = infer_model_kwargs(state_dict)
 
@@ -362,11 +362,12 @@ def main():
     # El esquema explicito manda; si no se pasa, se infiere del numero de
     # salidas (solo distingue macro de fine, no los esquemas con mapa propio).
     modo = args.label_mode or ("fine" if num_classes > 3 else "macro")
+    # Cualquier esquema que no sea "macro" necesita el CSV.
     if modo != "macro" and args.partition_report is None:
         raise SystemExit(
-        f"El esquema {modo!r} requiere --partition-report para "
-        "recuperar la actividad de cada segmento."
-    )
+            f"El esquema {modo!r} necesita --partition-report para resolver "
+            "las actividades del CSV."
+        )
 
     dataset = SegmentDataset(
         os.path.join(conf.data_dir, args.split),

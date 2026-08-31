@@ -94,7 +94,7 @@ def main():
         ck = find_checkpoints(Path(run))
         if not ck:
             continue
-        sd = torch.load(ck[0][1], map_location="cpu")
+        sd = torch.load(ck[0][1], map_location="cpu", weights_only=False)
         sd = sd.get("model_state_dict", sd)
         n_out_por_run[run] = infer_model_kwargs(sd)["num_classes"]
 
@@ -103,13 +103,15 @@ def main():
     else:
         modos = {n: ("fine" if n > 3 else "macro")
                  for n in set(n_out_por_run.values())}
-    if any(modo != "macro" for modo in modos.values()) and args.partition_report is None:
+    # Cualquier esquema que no sea "macro" resuelve la etiqueta desde el
+    # CSV: las actividades de grano fino no estan en el arbol de carpetas.
+    if any(m != "macro" for m in modos.values()) and args.partition_report is None:
         raise SystemExit(
-        "El esquema de etiquetado seleccionado requiere "
-        "--partition-report para recuperar la actividad de cada segmento.\n"
-        "  Modos por numero de salidas: "
-        + ", ".join(f"{n}={modo}" for n, modo in modos.items())
-    )
+            f"El esquema de etiquetado ({sorted(set(modos.values()))}) necesita "
+            "--partition-report para resolver las actividades del CSV.\n"
+            "  Salidas por corrida: "
+            + ", ".join(f"{Path(r).name}={n}" for r, n in n_out_por_run.items())
+        )
 
     # El dataset y el DataLoader se construyen UNA sola vez POR MODO y se
     # reusan para todos los checkpoints de ese modo. persistent_workers
@@ -158,7 +160,7 @@ def main():
             continue
 
         # La arquitectura es la misma en toda la corrida: se infiere una vez
-        primer_sd = torch.load(ckpts[0][1], map_location="cpu")
+        primer_sd = torch.load(ckpts[0][1], map_location="cpu", weights_only=False)
         primer_sd = primer_sd.get("model_state_dict", primer_sd)
         inferido = infer_model_kwargs(primer_sd)
         num_classes = inferido.pop("num_classes")
@@ -172,7 +174,7 @@ def main():
         best_path = run_dir / "model_best.pth"
         epoca_best = None
         if best_path.exists():
-            b = torch.load(best_path, map_location="cpu")
+            b = torch.load(best_path, map_location="cpu", weights_only=False)
             epoca_best = b.get("epoch")
 
         print(f"[{nombre}] {len(ckpts)} checkpoints  |  arquitectura {inferido} "
@@ -180,7 +182,7 @@ def main():
 
         filas = []
         for epoca, path in ckpts:
-            sd = torch.load(path, map_location="cpu")
+            sd = torch.load(path, map_location="cpu", weights_only=False)
             sd = sd.get("model_state_dict", sd)
             model.load_state_dict(sd, strict=False)
 
