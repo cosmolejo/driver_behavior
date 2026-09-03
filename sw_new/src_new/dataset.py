@@ -287,7 +287,7 @@ class SegmentDataset(Dataset):
                 if not os.path.isdir(session_path):
                     continue
                 for video_name in os.listdir(session_path):
-                    video_path = os.path.join(session_path, video_name, "face")
+                    video_path = os.path.join(session_path, video_name, "body")
                     if not os.path.isdir(video_path):
                         continue
 
