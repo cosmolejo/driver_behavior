@@ -33,6 +33,7 @@ class SegmentDataset(Dataset):
     def __init__(
         self,
         root_dir: str,
+        camera_view: str,
         sequence_length: int = 32,
         sample_one_each: int = 1,
         stride: int = 8,
@@ -161,6 +162,23 @@ class SegmentDataset(Dataset):
             )
 
         self.root_dir = root_dir
+
+        # La vista de c�mara debe declararse expl�citamente. No hay default
+        # deliberadamente: evita volver a entrenar/evaluar con otra c�mara
+        # por un hardcode olvidado.
+        self.camera_view = str(camera_view).strip().lower()
+        valid_camera_views = {"body", "face"}
+        if self.camera_view not in valid_camera_views:
+            raise ValueError(
+                f"camera_view debe ser una de {sorted(valid_camera_views)}, "
+                f"no {camera_view!r}"
+            )
+
+        # Si falta la c�mara seleccionada en cualquier segmento, no se
+        # descarta silenciosamente: al final de _build_index se aborta con
+        # ejemplos de las rutas problem�ticas.
+        self.missing_camera_paths = []
+
         self.sequence_length = sequence_length
         self.sample_one_each = sample_one_each
         self.stride = stride
@@ -259,6 +277,23 @@ class SegmentDataset(Dataset):
 
         self._build_index()
 
+        split_name = Path(root_dir).name.upper()
+        print(f"[{split_name}] camera_view={self.camera_view!r}")
+
+        if self.missing_camera_paths:
+            examples = self.missing_camera_paths[:5]
+            raise RuntimeError(
+                f"[{split_name}] faltan {len(self.missing_camera_paths)} carpetas "
+                f"para camera_view={self.camera_view!r}. No se omiten "
+                f"silenciosamente. Ejemplos: {examples}"
+            )
+
+        if not self.segments:
+            raise RuntimeError(
+                f"[{split_name}] no se encontr� ning�n segmento para "
+                f"camera_view={self.camera_view!r} en {root_dir}"
+            )
+
         if self.balance_unit is not None or windows_per_segment is not None:
             self._balance_index(root_dir)
 
@@ -287,8 +322,13 @@ class SegmentDataset(Dataset):
                 if not os.path.isdir(session_path):
                     continue
                 for video_name in os.listdir(session_path):
-                    video_path = os.path.join(session_path, video_name, "body")
+                    segment_path = os.path.join(session_path, video_name)
+                    video_path = os.path.join(
+                        segment_path,
+                        self.camera_view,
+                    )
                     if not os.path.isdir(video_path):
+                        self.missing_camera_paths.append(video_path)
                         continue
 
                     # Filtro por sujeto (curva de aprendizaje)

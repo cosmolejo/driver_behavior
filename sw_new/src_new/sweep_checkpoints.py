@@ -71,6 +71,12 @@ def main():
     parser.add_argument("--csv-out", default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--camera-view",
+        default=None,
+        choices=["body", "face"],
+        help="Override opcional; si se omite, usa camera_view del YAML.",
+    )
     parser.add_argument("--label-mode", default=None,
                         help="esquema de etiquetado usado al entrenar: "
                              "macro | fine | binary_phone | ternary_clean. "
@@ -83,6 +89,14 @@ def main():
     args = parser.parse_args()
 
     conf = OmegaConf.load(args.config)
+
+    camera_view = args.camera_view or conf.get("camera_view", None)
+    if camera_view is None:
+        raise SystemExit(
+            "Falta camera_view. Añádelo al YAML o usa --camera-view body|face."
+        )
+    camera_view = str(camera_view).strip().lower()
+    print(f"Camera view: {camera_view}")
 
     # Un checkpoint entrenado con 9 clases finas necesita que el dataset
     # devuelva etiquetas FINAS: si se cargan las macro (0-2) y el modelo
@@ -103,12 +117,10 @@ def main():
     else:
         modos = {n: ("fine" if n > 3 else "macro")
                  for n in set(n_out_por_run.values())}
-    # Cualquier esquema que no sea "macro" resuelve la etiqueta desde el
-    # CSV: las actividades de grano fino no estan en el arbol de carpetas.
-    if any(m != "macro" for m in modos.values()) and args.partition_report is None:
+    if any(modo != "macro" for modo in modos.values()) and args.partition_report is None:
         raise SystemExit(
-            f"El esquema de etiquetado ({sorted(set(modos.values()))}) necesita "
-            "--partition-report para resolver las actividades del CSV.\n"
+            "El esquema seleccionado requiere --partition-report. "
+            "Esto aplica a fine, binary_phone y otros esquemas no-macro.\n"
             "  Salidas por corrida: "
             + ", ".join(f"{Path(r).name}={n}" for r, n in n_out_por_run.items())
         )
@@ -129,6 +141,7 @@ def main():
     for modo in set(modos.values()):
         ds = SegmentDataset(
             os.path.join(conf.data_dir, args.split),
+            camera_view=camera_view,
             sequence_length=conf.sequence_length,
             sample_one_each=conf.sample_one_each,
             transform=transform,
@@ -186,7 +199,7 @@ def main():
             sd = sd.get("model_state_dict", sd)
             model.load_state_dict(sd, strict=False)
 
-            cm_w, cm_s = evaluate(
+            cm_w, cm_s, _ = evaluate(
                 model, loader, args.device, num_classes,
                 conf.max_windows_per_forward,
                 label_groups=grupos,

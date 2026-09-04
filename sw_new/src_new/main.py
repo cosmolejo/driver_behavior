@@ -13,10 +13,22 @@ if __name__ == "__main__":
     conf = OmegaConf.load(config_path)
     conf = OmegaConf.merge(conf, cli_config)
 
+    if "camera_view" not in conf or conf.camera_view is None:
+        raise ValueError(
+            "Falta camera_view en el config. Usa camera_view: body "
+            "o camera_view: face."
+        )
+    conf.camera_view = str(conf.camera_view).strip().lower()
+    if conf.camera_view not in ("body", "face"):
+        raise ValueError(
+            f"camera_view debe ser 'body' o 'face', no {conf.camera_view!r}"
+        )
+
     if conf.optuna.study_name is not None:
         del conf.optuna
 
     print(f"Config: {config_path}")
+    print(f"Camera view: {conf.camera_view}")
     print(OmegaConf.to_yaml(conf))
 
     train_pipeline(**conf)

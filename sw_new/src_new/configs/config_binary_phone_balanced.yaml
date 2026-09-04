@@ -1,5 +1,7 @@
 data_dir: /home/agomez/Documents/dmd_user_split
-partition_report: //home/agomez/Documents/dmd_user_split/partition_report.csv  # AJUSTAR
+# Vista usada por TRAIN/VALIDATION/TEST. Obligatorio: body | face
+camera_view: body
+partition_report: /home/agomez/Documents/dmd_user_split/partition_report.csv  # AJUSTAR
 num_classes: 2
 sequence_length: 32
 sample_one_each: 2
@@ -59,7 +61,7 @@ model_kwargs:
   freeze_backbone: true
   freeze_bn: true
 
-unfreeze_schedule: {0: 10}
+unfreeze_schedule: {0: 13}
 unfreeze_lr_decay: 0.3
 
 seed: 42

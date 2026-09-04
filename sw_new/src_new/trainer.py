@@ -23,7 +23,7 @@ def compute_class_weights(dataset: SegmentDataset, num_classes: int, power: floa
     """
     Pesos inversamente proporcionales a la frecuencia de cada clase, contada
     en SEGMENTOS (no en windows) para ser consistente con el esquema de
-    pesar cada segmento por igual sin importar cuántas windows genere.
+    pesar cada segmento por igual sin importar cu�ntas windows genere.
     Elevados a `power` (tuneable), normalizados para que promedien 1.
     """
     counts = np.zeros(num_classes, dtype=np.float64)
@@ -69,10 +69,10 @@ def segment_forward_backward(
     `max_windows_per_forward` (para no reventar memoria en segmentos con
     muchas windows), y hace backward() incremental por chunk.
 
-    La normalización (dividir por num_windows del segmento, y por
+    La normalizaci�n (dividir por num_windows del segmento, y por
     loss_scale = 1/accumulation_steps) asegura que el gradiente acumulado
-    sea matemáticamente idéntico a haber promediado las windows del
-    segmento en un solo forward gigante. El tamaño de chunk es solo una
+    sea matem�ticamente id�ntico a haber promediado las windows del
+    segmento en un solo forward gigante. El tama�o de chunk es solo una
     perilla de memoria/velocidad, no cambia el resultado.
 
     Devuelve: (loss_promedio_del_segmento (float), correctos, num_windows,
@@ -93,7 +93,7 @@ def segment_forward_backward(
         outputs = model(chunk)
         per_window_loss = criterion(outputs, chunk_labels)  # (chunk_size,), reduction='none'
 
-        # Promedio sobre el segmento completo * escala de acumulación,
+        # Promedio sobre el segmento completo * escala de acumulaci�n,
         # partido en este chunk (ver docstring)
         chunk_loss = per_window_loss.sum() / num_windows * loss_scale
         chunk_loss.backward()
@@ -133,10 +133,10 @@ def train_one_epoch(
     running_correct = 0
     running_windows = 0
 
-    # Acumuladores a nivel de ÉPOCA COMPLETA (independientes de la ventana
+    # Acumuladores a nivel de �POCA COMPLETA (independientes de la ventana
     # de logging cada log_every_n_steps), para poder comparar train vs val
-    # en igualdad de condiciones (misma unidad de agregación: toda la
-    # época) y detectar el gap real de generalización.
+    # en igualdad de condiciones (misma unidad de agregaci�n: toda la
+    # �poca) y detectar el gap real de generalizaci�n.
     epoch_loss_sum = 0.0
     epoch_correct = 0
     epoch_windows = 0
@@ -198,8 +198,8 @@ def train_one_epoch(
                 running_windows = 0
 
     # Si sobran segmentos acumulados sin completar un accumulation_steps
-    # (último batch de la época), se descartan esos gradientes parciales
-    # llamando zero_grad implícitamente en la próxima época; no se hace
+    # (�ltimo batch de la �poca), se descartan esos gradientes parciales
+    # llamando zero_grad impl�citamente en la pr�xima �poca; no se hace
     # optimizer.step() con un accumulation incompleto para no sesgar la
     # escala del gradiente.
 
@@ -382,22 +382,6 @@ def _rng_state() -> dict:
     return estado
 
 
-def _restore_generator_state(generator, estado):
-    """
-    Restaura el estado del generador del DataLoader.
-
-    `torch.load(..., map_location=device)` mueve TODOS los tensores del
-    checkpoint al device, incluido el estado del RNG. `set_state()` exige
-    un ByteTensor en CPU, asi que hay que devolverlo explicitamente.
-    """
-    if generator is None or estado is None:
-        return
-    try:
-        generator.set_state(estado.cpu().to(torch.uint8))
-    except Exception as e:
-        print(f"  AVISO: no se pudo restaurar el estado del generador ({e})")
-
-
 def _restore_rng_state(estado: dict):
     import random as _random
 
@@ -416,28 +400,199 @@ def _restore_rng_state(estado: dict):
             print(f"  AVISO: no se pudo restaurar el estado RNG de CUDA ({e})")
 
 
-def _plain(obj):
-    """
-    Convierte contenedores de OmegaConf (DictConfig/ListConfig) a tipos
-    nativos de Python.
 
-    Guardar un DictConfig dentro del checkpoint hace que `torch.load` falle
-    en PyTorch 2.6+, donde `weights_only=True` es el default y rechaza
-    cualquier global que no este en la lista blanca.
+def _optimizer_param_names(model, optimizer) -> list:
+    """Devuelve los nombres de parametros de cada param_group del optimizer."""
+    name_by_id = {id(param): name for name, param in model.named_parameters()}
+    grupos = []
+    for group in optimizer.param_groups:
+        nombres = []
+        for param in group["params"]:
+            nombre = name_by_id.get(id(param))
+            if nombre is None:
+                raise RuntimeError(
+                    "Hay un parametro del optimizer que no pertenece a model.named_parameters()."
+                )
+            nombres.append(nombre)
+        grupos.append(nombres)
+    return grupos
+
+
+def _checkpoint_optimizer_param_names(model, ckpt: dict):
     """
+    Recupera la correspondencia param_group -> nombres de parametros usada
+    al guardar el optimizer.
+
+    Checkpoints nuevos traen `optimizer_param_names` explicitamente. Para
+    checkpoints antiguos se intenta reconstruir la estructura a partir del
+    `unfreeze_schedule` guardado en `config`.
+    """
+    if "optimizer_param_names" in ckpt:
+        return ckpt["optimizer_param_names"]
+
+    guardado = ckpt.get("optimizer_state_dict")
+    if not guardado:
+        return None
+
+    cfg_prev = ckpt.get("config", {}) or {}
+    old_schedule = cfg_prev.get("unfreeze_schedule")
+
+    # Snapshot: ProgressiveUnfreezer congela el backbone en __init__. La
+    # reconstruccion de grupos no debe alterar requires_grad del modelo vivo.
+    req_grad = {id(param): param.requires_grad for param in model.parameters()}
     try:
-        from omegaconf import OmegaConf
-        from omegaconf.base import Container
-        if isinstance(obj, Container):
-            return OmegaConf.to_container(obj, resolve=True)
-    except ImportError:
-        pass
-    if isinstance(obj, dict):
-        return {k: _plain(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_plain(v) for v in obj]
-    return obj
+        if old_schedule is None:
+            grupos_reconstruidos = [{"params": list(model.parameters())}]
+        else:
+            from progressive_unfreeze import ProgressiveUnfreezer
 
+            schedule = {int(k): int(v) for k, v in dict(old_schedule).items()}
+            old_unfreezer = ProgressiveUnfreezer(
+                model, schedule=schedule, verbose=False
+            )
+            # Los valores concretos de LR no importan para reconstruir la
+            # membresia y el orden de los grupos.
+            grupos_reconstruidos = old_unfreezer.build_param_groups(
+                base_lr=1.0, decay=1.0
+            )
+    finally:
+        for param in model.parameters():
+            param.requires_grad = req_grad[id(param)]
+
+    grupos_guardados = guardado.get("param_groups", [])
+    if len(grupos_reconstruidos) != len(grupos_guardados):
+        return None
+
+    name_by_id = {id(param): name for name, param in model.named_parameters()}
+    nombres = []
+    for grupo_real, grupo_sd in zip(grupos_reconstruidos, grupos_guardados):
+        params_reales = list(grupo_real["params"])
+        params_ids = list(grupo_sd["params"])
+        if len(params_reales) != len(params_ids):
+            return None
+        nombres.append([name_by_id[id(param)] for param in params_reales])
+
+    return nombres
+
+
+def _clone_optimizer_state_for_param(state: dict, param: torch.nn.Parameter):
+    """Copia un estado Adam/AdamW al dispositivo/dtype del parametro destino."""
+    import copy
+
+    out = {}
+    for key, value in state.items():
+        if torch.is_tensor(value):
+            # exp_avg, exp_avg_sq y max_exp_avg_sq tienen la forma exacta
+            # del parametro. `step` suele ser un tensor escalar y conserva
+            # su dtype original.
+            if key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                if tuple(value.shape) != tuple(param.shape):
+                    return None
+                out[key] = value.detach().clone().to(
+                    device=param.device, dtype=param.dtype
+                )
+            else:
+                out[key] = value.detach().clone().to(device=param.device)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _restore_optimizer_state_partial(model, optimizer, ckpt: dict) -> bool:
+    """
+    Restaura los momentos de Adam/AdamW POR NOMBRE DE PARAMETRO.
+
+    Esto permite continuar el fine-tuning cuando cambia `unfreeze_schedule`:
+    - parametros ya optimizados conservan `step`, `exp_avg`, `exp_avg_sq`;
+    - capas recien incorporadas quedan con estado Adam limpio;
+    - los param_groups, learning rates y weight decay son SIEMPRE los de la
+      configuracion actual.
+
+    Devuelve True si pudo reconstruir el mapeo del checkpoint, aunque algunos
+    parametros queden necesariamente sin estado previo.
+    """
+    guardado = ckpt.get("optimizer_state_dict")
+    if not guardado:
+        print("  AVISO: el checkpoint no contiene optimizer_state_dict.")
+        return False
+
+    nombres_prev = _checkpoint_optimizer_param_names(model, ckpt)
+    if nombres_prev is None:
+        print(
+            "  AVISO: no se pudo reconstruir la correspondencia de parametros "
+            "del optimizer anterior. Se usan pesos del modelo, pero Adam "
+            "arranca limpio."
+        )
+        return False
+
+    grupos_prev = guardado.get("param_groups", [])
+    if len(nombres_prev) != len(grupos_prev):
+        print(
+            "  AVISO: metadata del optimizer inconsistente; Adam arranca limpio."
+        )
+        return False
+
+    # state_dict de optimizer usa IDs enteros internos. Los asociamos con
+    # nombres usando el orden de cada param_group del checkpoint.
+    estado_por_nombre = {}
+    for nombres_grupo, grupo_sd in zip(nombres_prev, grupos_prev):
+        ids_grupo = list(grupo_sd["params"])
+        if len(nombres_grupo) != len(ids_grupo):
+            print(
+                "  AVISO: tamanos incompatibles al reconstruir el optimizer; "
+                "Adam arranca limpio."
+            )
+            return False
+        for nombre, pid in zip(nombres_grupo, ids_grupo):
+            estado = guardado.get("state", {}).get(pid)
+            if estado:
+                estado_por_nombre[nombre] = estado
+
+    name_by_id = {id(param): name for name, param in model.named_parameters()}
+    restaurados = 0
+    incompatibles = 0
+    sin_historial = 0
+    por_grupo = []
+
+    # optimizer es nuevo: su `state` esta vacio. Solo inyectamos los estados
+    # compatibles; los demas se inicializaran automaticamente en el primer
+    # optimizer.step() que reciba gradiente.
+    optimizer.state.clear()
+
+    for group in optimizer.param_groups:
+        grupo_rest = grupo_total = 0
+        for param in group["params"]:
+            grupo_total += 1
+            nombre = name_by_id[id(param)]
+            estado_prev = estado_por_nombre.get(nombre)
+            if estado_prev is None:
+                sin_historial += 1
+                continue
+
+            estado_nuevo = _clone_optimizer_state_for_param(estado_prev, param)
+            if estado_nuevo is None:
+                incompatibles += 1
+                continue
+
+            optimizer.state[param] = estado_nuevo
+            restaurados += 1
+            grupo_rest += 1
+
+        por_grupo.append((group.get("name", "sin_nombre"), grupo_rest, grupo_total))
+
+    print("  optimizer restaurado PARCIALMENTE por nombre de parametro:")
+    for nombre, n_rest, n_total in por_grupo:
+        print(f"     {nombre:<24} {n_rest:>4}/{n_total:<4} parametros con estado Adam previo")
+    print(
+        f"     total restaurados: {restaurados} | sin historial previo: "
+        f"{sin_historial} | incompatibles por forma: {incompatibles}"
+    )
+    print(
+        "     lr/weight_decay y estructura de param_groups provienen del "
+        "config ACTUAL; el scheduler se construye despues desde cero salvo "
+        "que resume_scheduler=true."
+    )
+    return True
 
 def _build_checkpoint(model, optimizer, scheduler, generator, epoch, global_step,
                       estado_mejores: dict, config: dict, incluir_rng: bool = True) -> dict:
@@ -454,8 +609,11 @@ def _build_checkpoint(model, optimizer, scheduler, generator, epoch, global_step
         "global_step": global_step,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
+        # Guardar nombres hace posible transferir Adam por parametro aunque
+        # cambie el unfreeze_schedule y, con el, la estructura de grupos.
+        "optimizer_param_names": _optimizer_param_names(model, optimizer),
         "scheduler_state_dict": scheduler.state_dict(),
-        "config": _plain(config),
+        "config": config,
     }
     ck.update(estado_mejores)
     if generator is not None:
@@ -511,30 +669,43 @@ def train_pipeline(
     balance_classes: bool = False,
     balance_unit: Optional[str] = None,
     windows_per_segment: Optional[int] = None,
+    camera_view: Optional[str] = None,
 ):
     """
     Entrenamiento con loss promediada por segmento: cada segmento aporta UNA
-    contribución de gradiente (promedio de la CE de todas sus windows), sin
-    importar cuántas windows haya generado. `accumulation_steps` segmentos
+    contribuci�n de gradiente (promedio de la CE de todas sus windows), sin
+    importar cu�ntas windows haya generado. `accumulation_steps` segmentos
     se acumulan antes de cada optimizer.step() (batch efectivo fijo).
 
     Si se pasa `trial` (optuna.Trial), se reporta val_macro_f1 al final de
-    cada época para permitir pruning (dirección "maximize" en el study).
+    cada �poca para permitir pruning (direcci�n "maximize" en el study).
     Devuelve el mejor val_macro_f1 observado. val_loss se sigue trackeando
-    y logueando en TensorBoard, pero ya no es la métrica de selección.
+    y logueando en TensorBoard, pero ya no es la m�trica de selecci�n.
 
     El checkpoint "best" se guarda por mejor val_macro_f1 (antes era por
-    val_acc), consistente con el criterio de selección de Optuna.
+    val_acc), consistente con el criterio de selecci�n de Optuna.
 
     Si `early_stopping_patience` no es None, el entrenamiento corta antes
     de completar `num_epochs` si val_macro_f1 no mejora durante esa
-    cantidad de épocas consecutivas. Por defecto (None) queda deshabilitado
-    para no alterar el comportamiento de la búsqueda de Optuna
+    cantidad de �pocas consecutivas. Por defecto (None) queda deshabilitado
+    para no alterar el comportamiento de la b�squeda de Optuna
     (search_epochs ya es corto); pensado para usarse en el retrain final
     de num_epochs largo.
     """
     loss_kwargs = dict(loss_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
+
+    if camera_view is None:
+        raise ValueError(
+            "camera_view es obligatorio. Def�nelo expl�citamente en el YAML "
+            "como camera_view: body o camera_view: face."
+        )
+    camera_view = str(camera_view).strip().lower()
+    if camera_view not in ("body", "face"):
+        raise ValueError(
+            f"camera_view debe ser 'body' o 'face', no {camera_view!r}"
+        )
+    print(f"Camera view fijada: {camera_view}")
 
     # -----------------------------------------------------------------
     # Semilla
@@ -576,7 +747,7 @@ def train_pipeline(
     #     por clip  : ClipNormalize                         <- despues
     #
     # Normalizar antes de la augmentation romperia los ops de color
-    # (adjust_brightness y compañia asumen [0,1]).
+    # (adjust_brightness y compa�ia asumen [0,1]).
     # ------------------------------------------------------------------
     MEAN = [0.485, 0.456, 0.406]
     STD = [0.229, 0.224, 0.225]
@@ -619,7 +790,8 @@ def train_pipeline(
               f" | offset_jitter={temporal_offset_jitter}"
               f" | cutout_frames={temporal_cutout_frames}")
 
-    ds_kwargs = dict(sequence_length=sequence_length,
+    ds_kwargs = dict(camera_view=camera_view,
+                     sequence_length=sequence_length,
                      sample_one_each=sample_one_each,
                      transform=transform,
                      label_mode=label_mode,
@@ -663,7 +835,7 @@ def train_pipeline(
         num_classes = n_out
 
     # batch_size=1: cada __getitem__ ya es "todas las windows de un
-    # segmento"; el agrupamiento real ocurre vía accumulation_steps.
+    # segmento"; el agrupamiento real ocurre v�a accumulation_steps.
     train_loader = DataLoader(
         train_dataset,
         batch_size=1,
@@ -704,7 +876,16 @@ def train_pipeline(
     ckpt = None
     _res_opt = _res_sch = _res_ep = _restore_rng = False
     if resume_from is not None:
-        ckpt = torch.load(resume_from, map_location=device, weights_only=False)
+        # Checkpoint completo de entrenamiento (pesos + optimizer + scheduler
+        # + RNG + config). Desde PyTorch 2.6, torch.load usa weights_only=True
+        # por defecto; nuestros checkpoints contienen metadata de OmegaConf,
+        # por lo que se carga explicitamente en modo completo. Usar solo con
+        # checkpoints propios o de una fuente de confianza.
+        ckpt = torch.load(
+            resume_from,
+            map_location=device,
+            weights_only=False,
+        )
         sd = ckpt.get("model_state_dict", ckpt)
 
         propio = model.state_dict()
@@ -718,6 +899,30 @@ def train_pipeline(
         missing, unexpected = model.load_state_dict(sd, strict=False)
         print(f"Checkpoint cargado: {resume_from}")
         print(f"  epoca de origen : {ckpt.get('epoch', '?')}")
+
+        prev_camera = ckpt.get("config", {}).get("camera_view")
+        if prev_camera is not None:
+            prev_camera = str(prev_camera).strip().lower()
+            if prev_camera != camera_view:
+                msg = (
+                    f"El checkpoint fue guardado con camera_view={prev_camera!r} "
+                    f"pero la corrida actual usa camera_view={camera_view!r}."
+                )
+                if resume_weights_only:
+                    print("  AVISO CAMBIO DE CAMARA: " + msg)
+                    print(
+                        "  Se permite porque resume_weights_only=True "
+                        "(transferencia de pesos deliberada)."
+                    )
+                else:
+                    raise ValueError(
+                        msg + " No se permite al reanudar una corrida completa."
+                    )
+        else:
+            print(
+                "  AVISO: checkpoint antiguo sin camera_view en metadata; "
+                "no es posible verificar autom�ticamente la c�mara de origen."
+            )
         if descartadas:
             print(f"  capas descartadas por forma incompatible: {descartadas}")
             print(f"  -> se reinicializan al azar (cambio de numero de clases)")
@@ -725,7 +930,7 @@ def train_pipeline(
             print(f"  faltantes  : {missing}")
         if unexpected:
             print(f"  inesperadas: {unexpected}")
-        _partes = []
+        print(f"  modo: {'solo pesos' if resume_weights_only else 'reanudar corrida completa'}")
 
         # `resume_restore_rng` por defecto sigue al modo: se restaura al
         # reanudar, no al partir de pesos.
@@ -743,16 +948,10 @@ def train_pipeline(
         _res_sch = _def if resume_scheduler is None else resume_scheduler
         _res_ep = _def if resume_epoch is None else resume_epoch
         _restore_rng = _def if resume_restore_rng is None else resume_restore_rng
-
-        _partes = ["pesos"]
-        if _res_opt: _partes.append("optimizer")
-        if _res_sch: _partes.append("scheduler")
-        if _res_ep: _partes.append("epoca/metricas")
-        if _restore_rng: _partes.append("RNG")
-        print(f"  se restaura: {', '.join(_partes)}")
         if resume_weights_only and _restore_rng:
             _restore_rng_state(ckpt.get("rng_state", {}))
-            _restore_generator_state(generator, ckpt.get("dataloader_generator_state"))
+            if generator is not None and "dataloader_generator_state" in ckpt:
+                generator.set_state(ckpt["dataloader_generator_state"])
             print("  estado RNG restaurado del checkpoint "
                   "(el shuffling continua el flujo anterior)")
 
@@ -794,40 +993,17 @@ def train_pipeline(
     # ------------------------------------------------------------------
     # Estado del optimizer
     #
-    # Se carga ANTES de construir el scheduler, y se reimponen lr y
-    # weight_decay del config: `load_state_dict` sobrescribe los
-    # `param_groups` completos, incluidos lr, weight_decay, initial_lr y
-    # max_lr. Sin esta correccion, restaurar el optimizer impondria
-    # silenciosamente los hiperparametros del checkpoint y OneCycleLR
-    # anelaria hacia el max_lr viejo.
-    #
-    # Lo que SI vale la pena restaurar son los momentos de Adam (exp_avg,
-    # exp_avg_sq): llevan informacion sobre la curvatura de la perdida y
-    # evitan el arranque en frio de la correccion de sesgo en los primeros
-    # pasos del fine-tuning.
+    # Cuando cambia `unfreeze_schedule`, los param_groups pueden cambiar de
+    # tamano y `optimizer.load_state_dict()` deja de ser valido. Para el
+    # fine-tuning por etapas se restauran los momentos de Adam por NOMBRE
+    # de parametro: las capas ya entrenadas conservan su historial y las
+    # recien descongeladas empiezan con Adam limpio. Los LR y param_groups
+    # son siempre los de la configuracion actual.
     # ------------------------------------------------------------------
-    if ckpt is not None and _res_opt and "optimizer_state_dict" in ckpt:
-        guardado = ckpt["optimizer_state_dict"]
-        n_prev, n_ahora = len(guardado["param_groups"]), len(optimizer.param_groups)
-        if n_prev != n_ahora:
-            print(f"  AVISO: el checkpoint tiene {n_prev} param_groups y la "
-                  f"configuracion actual {n_ahora} (cambio unfreeze_schedule "
-                  f"o unfreeze_lr_decay). NO se restaura el optimizer.")
+    if ckpt is not None and _res_opt:
+        ok_opt = _restore_optimizer_state_partial(model, optimizer, ckpt)
+        if not ok_opt:
             _res_opt = False
-        else:
-            hp = [{"lr": g["lr"], "weight_decay": g["weight_decay"]}
-                  for g in optimizer.param_groups]
-            optimizer.load_state_dict(guardado)
-            # Reimponer los hiperparametros del config y limpiar los rastros
-            # del scheduler anterior.
-            for g, orig in zip(optimizer.param_groups, hp):
-                g["lr"] = orig["lr"]
-                g["weight_decay"] = orig["weight_decay"]
-                g.pop("initial_lr", None)
-                g.pop("max_lr", None)
-                g.pop("min_lr", None)
-            print("  optimizer restaurado (momentos de Adam); lr y weight_decay "
-                  "tomados del config actual")
 
     steps_per_epoch = max(1, len(train_loader) // accumulation_steps)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -861,19 +1037,8 @@ def train_pipeline(
         # warmup: si lo que se busca es un fine-tuning que arranque con
         # warmup desde pesos ya buenos, este flag debe quedar en False.
         if _res_sch and "scheduler_state_dict" in ckpt:
-            prev_total = ckpt["scheduler_state_dict"].get("total_steps")
-            ahora_total = getattr(scheduler, "total_steps", None)
-            if prev_total is not None and ahora_total is not None and prev_total != ahora_total:
-                print(f"  AVISO: el scheduler del checkpoint tiene "
-                      f"total_steps={prev_total} y la configuracion actual "
-                      f"{ahora_total} (cambio num_epochs).")
-                print("     Restaurarlo dejaria a OneCycleLR al final de su ciclo "
-                      "VIEJO y fallaria al pasarse de total_steps.")
-                print("     NO se restaura el scheduler: se usa un ciclo nuevo "
-                      "con warmup.")
-            else:
-                scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-                print("  scheduler restaurado: el ciclo CONTINUA (sin warmup nuevo)")
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+            print("  scheduler restaurado: el ciclo CONTINUA (sin warmup nuevo)")
 
         if _res_ep:
             start_epoch = int(ckpt.get("epoch", -1)) + 1
@@ -887,7 +1052,8 @@ def train_pipeline(
         # Estado de los generadores aleatorios: sin esto el shuffling y la
         # augmentation siguen una secuencia distinta a la original.
         _restore_rng_state(ckpt.get("rng_state", {}))
-        _restore_generator_state(generator, ckpt.get("dataloader_generator_state"))
+        if generator is not None and "dataloader_generator_state" in ckpt:
+            generator.set_state(ckpt["dataloader_generator_state"])
 
         # Aviso si la configuracion cambio: OneCycleLR guarda su posicion en
         # el ciclo, asi que reanudar con otro num_epochs o lr deja el
@@ -984,7 +1150,17 @@ def train_pipeline(
             "accumulation_steps": accumulation_steps,
             "label_mode": label_mode,
             "num_classes": num_classes,
-            "unfreeze_schedule": unfreeze_schedule,
+            "camera_view": camera_view,
+            "balance_classes": balance_classes,
+            "balance_unit": balance_unit,
+            "windows_per_segment": windows_per_segment,
+            # Guardar tipos Python puros evita serializar DictConfig dentro
+            # del checkpoint y mejora compatibilidad entre versiones.
+            "unfreeze_schedule": (
+                {int(k): int(v) for k, v in dict(unfreeze_schedule).items()}
+                if unfreeze_schedule is not None else None
+            ),
+            "unfreeze_lr_decay": unfreeze_lr_decay,
             "seed": seed,
         }
 
@@ -1036,9 +1212,9 @@ def train_pipeline(
             and epochs_without_improvement >= early_stopping_patience
         ):
             print(
-                f"Early stopping en época {epoch}: sin mejora de "
+                f"Early stopping en �poca {epoch}: sin mejora de "
                 f"val_macro_f1_segment durante {epochs_without_improvement} "
-                f"épocas consecutivas (mejor: {best_val_macro_f1_seg:.4f})"
+                f"�pocas consecutivas (mejor: {best_val_macro_f1_seg:.4f})"
             )
             break
 

@@ -249,11 +249,26 @@ def main():
         default=None,
         help="Ruta a partition_report.csv. Necesario para esquemas distintos de macro",
     )
+    parser.add_argument(
+        "--camera-view",
+        default=None,
+        choices=["body", "face"],
+        help="Override de camera_view; si se omite, usa el YAML.",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args()
 
     conf = OmegaConf.load(args.config)
+
+    camera_view = args.camera_view or conf.get("camera_view", None)
+    if camera_view is None:
+        raise SystemExit(
+            "Falta camera_view. Añade camera_view: body|face al YAML "
+            "o usa --camera-view."
+        )
+    camera_view = str(camera_view).strip().lower()
+    print(f"Camera view      : {camera_view}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     state_dict = ckpt.get("model_state_dict", ckpt)
     inferred = infer_model_kwargs(state_dict)
@@ -289,6 +304,7 @@ def main():
 
     dataset = SegmentDataset(
         os.path.join(conf.data_dir, args.split),
+        camera_view=camera_view,
         sequence_length=conf.sequence_length,
         sample_one_each=conf.sample_one_each,
         transform=transform,
