@@ -1,0 +1,21 @@
+# Escenario de ejemplo para can_injector.py
+#   python3 can_injector.py --load escenario_ejemplo.yaml
+#
+# 't' es el instante absoluto en segundos desde el inicio del escenario.
+# Claves admitidas por paso: speed, reverse, turn, hazard, fail, epb, door,
+# mas 'drop' y 'resume' con un id de trama ('0x146') o 'all'.
+
+name: adelantamiento_con_perdida
+descripcion: Adelantamiento en autovia y perdida temporal de la trama de velocidad.
+
+steps:
+  - {t: 0.0,  speed: 0.0}
+  - {t: 1.0,  speed: 45.0}
+  - {t: 3.0,  speed: 95.0}
+  - {t: 6.0,  turn: left}
+  - {t: 9.0,  turn: "off"}
+  - {t: 12.0, turn: right}
+  - {t: 15.0, turn: "off"}
+  - {t: 19.0, drop: "0x146"}
+  - {t: 22.0, resume: "0x146"}
+  - {t: 26.0, speed: 60.0}
