@@ -1,0 +1,115 @@
+# =====================================================================
+# Escenario 3: transicion de dia a noche
+#
+#   python3 pipeline.py \
+#       --body-video body.mp4 \
+#       --body-config configs/config_binary_phone_balanced.yaml \
+#       --body-checkpoint checkpoints/phone.pth \
+#       --can-channel vcan0 \
+#       --inject-scenario escenario_dia_a_noche.yaml \
+#       --inject-loop \
+#       --csv dia_a_noche.csv --verbose
+#
+# Duracion: 150 s. Con --inject-loop se repite hasta que termine el video.
+#
+# PROPOSITO. A diferencia de los otros dos escenarios, este no busca
+# disparar reglas sino producir datos con los que EVALUAR M4. Contiene dos
+# tramos deliberadamente identicos en todo salvo en la iluminacion:
+#
+#     TRAMO A   t =  6-30 s   90 km/h, sin lluvia, lowbeam=0   (dia)
+#     TRAMO E   t = 62-86 s   90 km/h, sin lluvia, lowbeam=1   (noche)
+#
+# Misma velocidad, misma duracion (24 s), mismo numero de iteraciones, y
+# ninguna regla de supresion activa en ninguno de los dos. La unica
+# variable que cambia es can_low_beam. Eso permite agrupar el CSV por esa
+# columna y comparar la distribucion de body_p_phone entre ambos tramos.
+#
+# Es la unica via para calibrar M4_NIGHT_FACTOR con evidencia en lugar de
+# a ojo, y requiere que el video de entrada tenga tramos reales de dia y
+# de noche: con material solo diurno la comparacion mide el ruido del
+# modelo, no el efecto de la iluminacion.
+#
+# PRUEBAS ADICIONALES incluidas a proposito:
+#
+#   Tunel (t=30-38)   lowbeam=1 en pleno dia. Comprueba de forma explicita
+#                     que LowBeamSts es un PROXY DEBIL de "es de noche": un
+#                     tunel produce una lectura de noche indistinguible de
+#                     la real. Mismo efecto tienen las luces diurnas
+#                     obligatorias fuera de zona urbana en varios paises.
+#                     Si al analizar el CSV este tramo se parece al TRAMO A
+#                     y no al E, la senal esta midiendo el faro y no la luz.
+#
+#   Crepusculo        lowbeam alterna cuatro veces en 12 s, como haria el
+#   (t=50-62)         automatico ante un cielo cambiante. Verifica que M4
+#                     no tiene histeresis: a diferencia de la velocidad,
+#                     conmuta en cuanto llega la trama. Si esa oscilacion
+#                     resulta molesta al activar el factor, la solucion es
+#                     anadir permanencia, y este tramo es el que lo mide.
+#
+#   Lluvia nocturna   M3 y M4 simultaneas. Los factores se multiplican, de
+#   (t=86-114)        modo que con ambos distintos de 1.0 el umbral efectivo
+#                     es el producto. Este tramo es el unico donde
+#                     can_sensitivity mostraria un valor compuesto.
+#
+#   Semaforo nocturno G1d con lowbeam=1: comprueba que las reglas G y las
+#   (t=124-134)       covariables M son independientes entre si.
+#
+#   Fallo nocturno    G1b con lowbeam=1, por el mismo motivo.
+#   (t=145-149)
+#
+# Todas las senales se fijan en t=0 para que el bucle parta siempre del
+# mismo estado.
+# =====================================================================
+
+name: dia_a_noche
+descripcion: Transicion diurno-nocturno con dos tramos pareados a 90 km/h, un tunel diurno, crepusculo con luces intermitentes y lluvia nocturna.
+
+steps:
+  # --- reinicio limpio del estado (importante para --inject-loop) ---
+  - {t: 0.0,   resume: "all"}
+  - {t: 0.0,   speed: 0.0, autostop: 0, hazard: 0, fail: 0}
+  - {t: 0.0,   wiper: 0, wiperspeed: "off", lowbeam: 0}
+
+  # --- arranque ---
+  - {t: 3.0,   speed: 40.0}
+
+  # ===== TRAMO A: dia, 90 km/h, 24 s. Pareado con el TRAMO E =====
+  - {t: 6.0,   speed: 90.0}
+
+  # --- tunel diurno: lectura de "noche" que no lo es ---
+  - {t: 30.0,  lowbeam: 1}
+  - {t: 38.0,  lowbeam: 0}
+
+  # --- dia de nuevo, misma velocidad ---
+  - {t: 42.0,  speed: 90.0}
+
+  # --- crepusculo: el automatico duda ---
+  - {t: 50.0,  lowbeam: 1}
+  - {t: 53.0,  lowbeam: 0}
+  - {t: 56.0,  lowbeam: 1}
+  - {t: 59.0,  lowbeam: 0}
+  - {t: 62.0,  lowbeam: 1}
+
+  # ===== TRAMO E: noche, 90 km/h, 24 s. Pareado con el TRAMO A =====
+  # No hace falta fijar la velocidad: viene en 90 km/h desde t=42 sin
+  # interrupcion, de modo que el tramo empieza exactamente en t=62 cuando
+  # lowbeam se queda encendido, y dura los mismos 24 s que el TRAMO A.
+
+  # --- lluvia nocturna: M3 y M4 simultaneas ---
+  - {t: 86.0,  wiper: 1, wiperspeed: "low"}
+  - {t: 94.0,  wiperspeed: "high"}
+  - {t: 102.0, speed: 75.0}
+  - {t: 110.0, wiperspeed: "low"}
+  - {t: 114.0, wiper: 0, wiperspeed: "off"}
+
+  # --- salida de autovia y semaforo nocturno: G1d con lowbeam=1 ---
+  - {t: 118.0, speed: 40.0}
+  - {t: 122.0, speed: 8.0}
+  - {t: 124.0, speed: 0.0, autostop: 1}
+  - {t: 134.0, autostop: 0}
+  - {t: 136.0, speed: 15.0}
+  - {t: 140.0, speed: 55.0}
+
+  # --- fallo declarado de la senal, ya de noche ---
+  - {t: 145.0, fail: 1}
+  - {t: 149.0, fail: 0}

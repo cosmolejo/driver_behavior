@@ -1,0 +1,79 @@
+# =====================================================================
+# Escenario 2: autovia de noche con lluvia y fallos de senal
+#
+#   python3 pipeline.py \
+#       --body-video body.mp4 \
+#       --body-config configs/config_binary_phone_balanced.yaml \
+#       --body-checkpoint checkpoints/phone.pth \
+#       --can-channel vcan0 \
+#       --inject-scenario escenario_autovia_noche_lluvia.yaml \
+#       --inject-loop \
+#       --csv noche_lluvia.csv --verbose
+#
+# Duracion: 150 s. Con --inject-loop se repite hasta que termine el video.
+#
+# Reglas ejercitadas (solo las del modelo de phone):
+#   M4   luces de cruce encendidas durante casi todo el trayecto
+#   M3   lluvia con intensidad variable (off -> low -> high -> low -> off)
+#   G1c  perdida de la trama 0x146 (obsolescencia por falta de recepcion)
+#   G1b  bandera VehicleSpeedVSOSigFailSts, que es un fallo DECLARADO por la
+#        ECU y no una ausencia de trama: son dos modos de fallo distintos y
+#        conviene verlos por separado en el CSV
+#   G1a  parada final en el arcen
+#   G2   luces de emergencia en esa parada
+#
+# Con M3_RAIN_FACTOR y M4_NIGHT_FACTOR en 1.0 estas dos no alteran ninguna
+# decision: el escenario sirve para comprobar que las covariables quedan
+# correctamente registradas en el CSV (can_raining, can_wiper_speed,
+# can_low_beam, can_sensitivity) antes de intentar calibrarlas.
+# =====================================================================
+
+name: autovia_noche_lluvia
+descripcion: Trayecto nocturno en autovia con lluvia variable, una perdida de trama, un fallo declarado de la senal de velocidad y parada final en el arcen.
+
+steps:
+  # --- reinicio limpio del estado (importante para --inject-loop) ---
+  - {t: 0.0,   resume: "all"}
+  - {t: 0.0,   speed: 0.0, autostop: 0, hazard: 0, fail: 0}
+  - {t: 0.0,   wiper: 0, wiperspeed: "off"}
+  - {t: 0.0,   lowbeam: 1}            # M4 activa desde el inicio
+
+  # --- incorporacion a la autovia ---
+  - {t: 4.0,   speed: 35.0}
+  - {t: 8.0,   speed: 75.0}
+  - {t: 14.0,  speed: 95.0}
+
+  # --- empieza a llover: M3 low ---
+  - {t: 20.0,  wiper: 1, wiperspeed: "low"}
+  - {t: 32.0,  speed: 105.0}
+
+  # --- arrecia: M3 high ---
+  - {t: 38.0,  wiperspeed: "high"}
+  - {t: 50.0,  speed: 88.0}
+  - {t: 58.0,  wiperspeed: "low"}
+
+  # --- escampa: M3 se desactiva ---
+  - {t: 66.0,  wiper: 0, wiperspeed: "off"}
+  - {t: 70.0,  speed: 112.0}
+
+  # --- G1c: se corta 0x146 durante 7 s ---
+  - {t: 78.0,  drop: "0x146"}
+  - {t: 85.0,  resume: "0x146"}
+  - {t: 88.0,  speed: 108.0}
+
+  # --- G1b: fallo declarado por la ECU, con la trama llegando ---
+  - {t: 95.0,  fail: 1}
+  - {t: 104.0, fail: 0}
+  - {t: 107.0, speed: 100.0}
+
+  # --- vuelve la lluvia, ahora fuerte ---
+  - {t: 112.0, wiper: 1, wiperspeed: "high"}
+  - {t: 120.0, speed: 70.0}
+
+  # --- salida y parada en el arcen: G1a + G2 ---
+  - {t: 128.0, speed: 30.0}
+  - {t: 132.0, speed: 2.0}
+  - {t: 134.0, hazard: 1}
+  - {t: 144.0, hazard: 0}
+  - {t: 146.0, wiper: 0, wiperspeed: "off"}
+  - {t: 148.0, speed: 12.0}

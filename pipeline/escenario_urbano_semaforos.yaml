@@ -1,0 +1,77 @@
+# =====================================================================
+# Escenario 1: conduccion urbana con semaforos
+#
+#   python3 pipeline.py \
+#       --body-video body.mp4 \
+#       --body-config configs/config_binary_phone_balanced.yaml \
+#       --body-checkpoint checkpoints/phone.pth \
+#       --can-channel vcan0 \
+#       --inject-scenario escenario_urbano_semaforos.yaml \
+#       --inject-loop \
+#       --csv urbano.csv --verbose
+#
+# Duracion: 150 s. Con --inject-loop se repite hasta que termine el video.
+#
+# Reglas ejercitadas (solo las del modelo de phone; R1/R2 quedan fuera):
+#   G1a  parada real por debajo de V_OFF, con histeresis en los arranques
+#   G1d  parada de trafico con start-stop (motor apagado en semaforo)
+#   G2   luces de emergencia
+#
+# Condiciones diurnas y secas a proposito: M3 y M4 permanecen inactivas
+# para que este escenario aisle el comportamiento de las reglas G.
+#
+# Todas las senales se fijan explicitamente en t=0 para que el reinicio
+# del bucle parta siempre del mismo estado y no herede el final anterior.
+# =====================================================================
+
+name: urbano_semaforos
+descripcion: Trayecto urbano con dos semaforos con start-stop, una parada con luces de emergencia y varios arranques.
+
+steps:
+  # --- reinicio limpio del estado (importante para --inject-loop) ---
+  - {t: 0.0,   resume: "all"}
+  - {t: 0.0,   speed: 0.0, autostop: 0, hazard: 0, fail: 0}
+  - {t: 0.0,   wiper: 0, wiperspeed: "off", lowbeam: 0}
+
+  # --- arranque: cruza V_ON=5, el sistema pasa a monitorear ---
+  - {t: 5.0,   speed: 18.0}
+  - {t: 8.0,   speed: 42.0}
+  - {t: 16.0,  speed: 50.0}
+
+  # --- semaforo 1: G1d, motor apagado por start-stop ---
+  - {t: 22.0,  speed: 12.0}
+  - {t: 24.0,  speed: 0.0, autostop: 1}
+  - {t: 34.0,  autostop: 0}
+  - {t: 35.0,  speed: 14.0}
+  - {t: 38.0,  speed: 45.0}
+
+  # --- tramo de circulacion ---
+  - {t: 50.0,  speed: 38.0}
+  - {t: 56.0,  speed: 52.0}
+
+  # --- semaforo 2: parada mas corta, tambien con start-stop ---
+  - {t: 64.0,  speed: 9.0}
+  - {t: 66.0,  speed: 0.0, autostop: 1}
+  - {t: 73.0,  autostop: 0}
+  - {t: 74.0,  speed: 16.0}
+  - {t: 78.0,  speed: 48.0}
+  - {t: 88.0,  speed: 55.0}
+
+  # --- parada en la via SIN start-stop: G1a puro, no es parada de trafico ---
+  - {t: 98.0,  speed: 20.0}
+  - {t: 101.0, speed: 2.0}
+
+  # --- luces de emergencia con el vehiculo detenido: G2 ---
+  - {t: 106.0, hazard: 1}
+  - {t: 118.0, hazard: 0}
+
+  # --- reanudacion de la marcha ---
+  - {t: 121.0, speed: 15.0}
+  - {t: 124.0, speed: 44.0}
+  - {t: 133.0, speed: 30.0}
+
+  # --- semaforo 3, ya cerca del final del ciclo ---
+  - {t: 138.0, speed: 8.0}
+  - {t: 140.0, speed: 0.0, autostop: 1}
+  - {t: 147.0, autostop: 0}
+  - {t: 149.0, speed: 6.0}
