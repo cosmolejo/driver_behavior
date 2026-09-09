@@ -63,10 +63,29 @@ Latencia del forward ExecuTorch de UNA ventana (benchmark historico):
         --pte model_binary_phone.pte \
         --mode executor_latency \
         --samples 500
+
+Latencia sobre TODOS los videos de una camara en una carpeta con face y body
+mezclados (filtra por 'camera_view' del YAML, convencion DMD
+'..._rgb_<face|body>_240.mp4'):
+
+    python demo.py \
+        --config configs/config_binary_phone_balanced.yaml \
+        --checkpoint ../models/binary_phone_lad13_augmentation/model_best_segment.pth \
+        --video-dir /ruta/a/videos_crudos \
+        --mode video_latency \
+        --inference-every 8
+
+    # Lo mismo con ExecuTorch:
+    python demo.py \
+        --config configs/config_binary_reaching.yaml \
+        --pte model_binary_reaching.pte \
+        --video-dir /ruta/a/videos_crudos \
+        --mode pte_video_latency
 """
 
 import argparse
 import math
+import re
 import time
 from collections import deque
 from pathlib import Path
@@ -96,6 +115,59 @@ DEFAULT_SEGMENT_WINDOWS = 20
 DEFAULT_WINDOW_STRIDE = 8
 DEFAULT_INFERENCE_EVERY = 8
 
+# Convencion DMD observada en los .mp4 crudos: NOMBRE_rgb_<camera>_240.mp4,
+# con <camera> en {face, body}. No es una convencion documentada en otro
+# sitio del repo, asi que si algun archivo no la sigue se excluye en vez de
+# adivinar, y se lista explicitamente por que quedo fuera.
+CAMERA_TOKEN_RE = re.compile(r"_rgb_(face|body)_")
+
+
+def discover_camera_videos(video_dir: str, camera_view: str) -> List[str]:
+    """Filtra una carpeta de .mp4 crudos (face+body mezclados) por camera_view.
+
+    camera_view es el mismo campo que ya usa dataset.py en entrenamiento
+    ('body' | 'face'), leido aqui del YAML en vez de inventar un campo nuevo.
+    """
+    directory = Path(video_dir)
+    if not directory.is_dir():
+        raise NotADirectoryError(f"No existe la carpeta: {video_dir}")
+
+    all_mp4 = sorted(directory.glob("*.mp4"))
+    if not all_mp4:
+        raise FileNotFoundError(f"No hay archivos .mp4 en {video_dir}")
+
+    matched, other_camera, unrecognized = [], [], []
+    for path in all_mp4:
+        m = CAMERA_TOKEN_RE.search(path.name)
+        if m is None:
+            unrecognized.append(path)
+        elif m.group(1) == camera_view:
+            matched.append(path)
+        else:
+            other_camera.append(path)
+
+    print(f"Video dir          : {video_dir}")
+    print(f"  .mp4 encontrados : {len(all_mp4)}")
+    print(f"  camera_view={camera_view:<4s}    : {len(matched)}")
+    print(f"  otra camara      : {len(other_camera)} (excluidos)")
+    if unrecognized:
+        print(
+            f"  AVISO: {len(unrecognized)} archivo(s) no siguen el patron "
+            "'*_rgb_(face|body)_*.mp4' y se excluyen por precaucion:"
+        )
+        for path in unrecognized[:5]:
+            print(f"    {path.name}")
+        if len(unrecognized) > 5:
+            print(f"    ... y {len(unrecognized) - 5} mas")
+
+    if not matched:
+        raise FileNotFoundError(
+            f"Ningun archivo coincide con camera_view={camera_view!r} en "
+            f"{video_dir}. Revisa que el YAML tenga la vista correcta."
+        )
+
+    return [str(path) for path in matched]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -124,6 +196,17 @@ def parse_args():
         help=(
             "Lista de videos completos para video_latency o "
             "pte_video_latency."
+        ),
+    )
+    parser.add_argument(
+        "--video-dir",
+        default=None,
+        help=(
+            "Carpeta con .mp4 crudos de face Y body mezclados (convencion "
+            "DMD: '..._rgb_<face|body>_240.mp4'). Se filtra automaticamente "
+            "por el 'camera_view' del YAML y el resultado alimenta el mismo "
+            "camino que --videos. Alternativa a --videos para los modos "
+            "video_latency / pte_video_latency; no se pueden combinar."
         ),
     )
     parser.add_argument(
@@ -220,6 +303,12 @@ def validate_args(args):
     if not config_path.exists():
         raise FileNotFoundError(f"No existe el config: {config_path}")
 
+    if args.video_dir and args.mode not in ("video_latency", "pte_video_latency"):
+        raise ValueError(
+            "--video-dir solo aplica a mode=video_latency o "
+            "mode=pte_video_latency."
+        )
+
     if args.samples <= 0:
         raise ValueError("--samples debe ser > 0.")
     if args.warmup < 0:
@@ -256,13 +345,16 @@ def validate_args(args):
             raise FileNotFoundError(f"No existe el modelo .pte: {args.pte}")
 
     if args.mode in ("video_latency", "pte_video_latency"):
-        if not args.videos:
-            raise ValueError(f"--videos es obligatorio para mode={args.mode}.")
-        missing = [video for video in args.videos if not Path(video).exists()]
-        if missing:
-            raise FileNotFoundError(
-                "No existen estos videos:\n" + "\n".join(missing)
+        if not args.videos and not args.video_dir:
+            raise ValueError(
+                f"--videos o --video-dir es obligatorio para mode={args.mode}."
             )
+        if args.videos:
+            missing = [video for video in args.videos if not Path(video).exists()]
+            if missing:
+                raise FileNotFoundError(
+                    "No existen estos videos:\n" + "\n".join(missing)
+                )
         if run_multiple_video_latency is None:
             raise ImportError(
                 "No fue posible importar multi_video_latency.py, requerido "
@@ -782,14 +874,37 @@ def executor_latency_test(
 
 def main():
     args = parse_args()
-    validate_args(args)
 
+    if args.video_dir and args.videos:
+        raise SystemExit("Usa --video-dir o --videos, no ambos.")
+
+    # camera_view decide el filtrado de --video-dir, asi que el config se
+    # carga antes de la validacion completa. validate_args() vuelve a
+    # comprobar la existencia del archivo mas abajo; la comprobacion aqui es
+    # solo para poder dar un error claro si --video-dir no puede resolverse.
+    config_path = Path(args.config)
+    if not config_path.exists():
+        raise FileNotFoundError(f"No existe el config: {config_path}")
     cfg = OmegaConf.load(args.config)
+
+    if args.video_dir:
+        camera_view = cfg.get("camera_view")
+        if camera_view not in ("face", "body"):
+            raise ValueError(
+                f"config.camera_view={camera_view!r} invalido o ausente; "
+                "--video-dir requiere 'face' o 'body' declarado en el YAML."
+            )
+        args.videos = discover_camera_videos(args.video_dir, camera_view)
+
+    validate_args(args)
 
     print("Configuracion")
     print("-------------")
     print(f"Config             : {args.config}")
     print(f"Mode               : {args.mode}")
+    if args.video_dir:
+        print(f"camera_view        : {cfg.get('camera_view')} (desde --video-dir)")
+        print(f"Videos filtrados   : {len(args.videos)}")
     print(f"segment_windows    : {args.segment_windows}")
     print(f"window_stride      : {args.window_stride}")
     print(f"inference_every    : {args.inference_every}")

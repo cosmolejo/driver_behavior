@@ -1,0 +1,41 @@
+Interprete: /home/agomez/miniconda3/envs/tesis/bin/python
+
+======================================================================
+ lc_s05  -- Curva: 5 sujetos (~1.2 h)
+ 2026-08-06 16:28:20
+======================================================================
+ /home/agomez/miniconda3/envs/tesis/bin/python main.py config_path=configs/config_learning_curve.yaml run_name=lc_s05 subject_subset=5
+
+======================================================================
+ lc_s10  -- Curva: 10 sujetos (~2.4 h)
+ 2026-08-06 16:28:20
+======================================================================
+ /home/agomez/miniconda3/envs/tesis/bin/python main.py config_path=configs/config_learning_curve.yaml run_name=lc_s10 subject_subset=10
+
+======================================================================
+ lc_s15  -- Curva: 15 sujetos (~3.5 h)
+ 2026-08-06 16:28:20
+======================================================================
+ /home/agomez/miniconda3/envs/tesis/bin/python main.py config_path=configs/config_learning_curve.yaml run_name=lc_s15 subject_subset=15
+
+======================================================================
+ lad04_ceweight  -- Pesos de clase: la unica palanca sin probar contra 'unsafe'
+ 2026-08-06 16:28:20
+======================================================================
+ /home/agomez/miniconda3/envs/tesis/bin/python main.py config_path=configs/config_unfreeze.yaml run_name=lad04_ceweight loss_fn=CE_weight
+
+======================================================================
+EXPERIMENTO          ESTADO     DURACION
+lc_s05               dry-run    -
+lc_s10               dry-run    -
+lc_s15               dry-run    -
+lad04_ceweight       dry-run    -
+
+Total: 0h 0m
+
+Al volver:
+  python sweep_checkpoints.py --config configs/config_unfreeze.yaml --csv-out curva.csv \
+      --runs ../models/lc_s05 ../models/lc_s10 ../models/lc_s15 ../models/lad04_blocks4
+
+Comparar MEDIAS DE MESETA (epocas 5-11) a nivel SEGMENTO.
+Referencia de 21 sujetos: lad04_blocks4 = 0.5631 +- 0.0036 (n=3).
