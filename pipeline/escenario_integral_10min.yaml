@@ -1,0 +1,175 @@
+# Escenario integral CAN ~10 min (600 s)
+# Reglas: G1a, G1b, G1c, G1d, G2, R1, R1:grace, R2, R2:post, M3, M4 y D.
+# Tambien prueba ctx:0x520_stale, ctx:0x560_stale y combinaciones de reglas.
+# NOTA: D se ejercita indirectamente alternando gates; para observarla con
+# claridad el video debe mantener una p_distraction suficientemente alta.
+
+name: escenario_integral_10min
+descripcion: Escenario CAN de 600 s para validar reglas aisladas, transiciones, staleness, histeresis, periodos de gracia, covariables, persistencia y combinaciones.
+
+steps:
+  # 0-20 s: reset + baseline / cruce de V_ON
+  - {t: 0.0,   resume: "all"}
+  - {t: 0.0,   speed: 0.0, fail: 0, autostop: 0}
+  - {t: 0.0,   reverse: 0, turn: "off", hazard: 0}
+  - {t: 0.0,   wiper: 0, wiperspeed: "off", lowbeam: 0}
+  - {t: 4.0,   speed: 3.5}
+  - {t: 8.0,   speed: 6.0}
+  - {t: 12.0,  speed: 50.0}
+
+  # 20-55 s: R2 aislada + R2:post
+  - {t: 20.0,  turn: "left"}
+  - {t: 28.0,  turn: "off"}
+  - {t: 36.0,  turn: "right"}
+  - {t: 44.0,  turn: "off"}
+  - {t: 52.0,  speed: 55.0}
+
+  # 55-90 s: R1 aislada + R1:grace
+  - {t: 58.0,  speed: 8.0}
+  - {t: 62.0,  reverse: 1}
+  - {t: 70.0,  reverse: 0}
+  - {t: 76.0,  reverse: 1}
+  - {t: 81.0,  reverse: 0}
+  - {t: 86.0,  speed: 45.0}
+
+  # 90-115 s: G2 aislada
+  - {t: 92.0,  hazard: 1}
+  - {t: 104.0, hazard: 0}
+  - {t: 110.0, speed: 60.0}
+
+  # 115-155 s: G1a + histeresis V_OFF/V_ON
+  - {t: 118.0, speed: 4.0}
+  - {t: 124.0, speed: 2.0}
+  - {t: 132.0, speed: 4.0}
+  - {t: 140.0, speed: 6.0}
+  - {t: 146.0, speed: 45.0}
+
+  # 155-190 s: G1d parada de trafico / start-stop
+  - {t: 158.0, speed: 10.0}
+  - {t: 162.0, speed: 0.0, autostop: 1}
+  - {t: 174.0, autostop: 0}
+  - {t: 178.0, speed: 4.0}
+  - {t: 182.0, speed: 8.0}
+  - {t: 186.0, speed: 50.0}
+
+  # 190-220 s: G1b fallo declarado
+  - {t: 194.0, fail: 1}
+  - {t: 206.0, fail: 0}
+  - {t: 212.0, speed: 70.0}
+
+  # 220-250 s: G1c perdida de 0x146
+  - {t: 222.0, speed: 80.0}
+  - {t: 226.0, drop: "0x146"}
+  - {t: 236.0, resume: "0x146"}
+  - {t: 238.0, speed: 80.0}
+
+  # 250-290 s: staleness de contexto 0x520 y 0x560
+  - {t: 250.0, turn: "off", hazard: 0}
+  - {t: 252.0, drop: "0x520"}
+  - {t: 260.0, resume: "0x520"}
+  - {t: 262.0, turn: "off", hazard: 0}
+  - {t: 270.0, reverse: 0}
+  - {t: 272.0, drop: "0x560"}
+  - {t: 280.0, resume: "0x560"}
+  - {t: 282.0, reverse: 0}
+
+  # 290-325 s: M3 aislada
+  - {t: 292.0, lowbeam: 0}
+  - {t: 296.0, wiper: 1, wiperspeed: "low"}
+  - {t: 304.0, wiperspeed: "high"}
+  - {t: 314.0, wiperspeed: "low"}
+  - {t: 320.0, wiper: 0, wiperspeed: "off"}
+
+  # 325-355 s: M4 aislada
+  - {t: 328.0, lowbeam: 1}
+  - {t: 348.0, lowbeam: 0}
+
+  # 355-385 s: M3 + M4
+  - {t: 358.0, lowbeam: 1}
+  - {t: 360.0, wiper: 1, wiperspeed: "high"}
+  - {t: 378.0, wiper: 0, wiperspeed: "off"}
+  - {t: 382.0, lowbeam: 0}
+
+  # 385-425 s: R1 + R2 + M3 + M4
+  - {t: 388.0, lowbeam: 1}
+  - {t: 390.0, wiper: 1, wiperspeed: "low"}
+  - {t: 392.0, turn: "left"}
+  - {t: 396.0, reverse: 1}
+  - {t: 404.0, reverse: 0}
+  - {t: 406.0, turn: "off"}
+  - {t: 412.0, wiper: 0, wiperspeed: "off"}
+  - {t: 416.0, lowbeam: 0}
+
+  # 425-460 s: G2 + R1 + R2; luego desmontaje escalonado
+  - {t: 428.0, speed: 40.0}
+  - {t: 430.0, reverse: 1, turn: "right", hazard: 1}
+  - {t: 440.0, hazard: 0}
+  - {t: 446.0, reverse: 0}
+  - {t: 450.0, turn: "off"}
+
+  # 460-500 s: G1b + G2 + R1 + R2 + M3 + M4
+  - {t: 462.0, speed: 90.0}
+  - {t: 464.0, lowbeam: 1}
+  - {t: 466.0, wiper: 1, wiperspeed: "high"}
+  - {t: 468.0, turn: "left"}
+  - {t: 470.0, reverse: 1}
+  - {t: 472.0, hazard: 1}
+  - {t: 474.0, fail: 1}
+  - {t: 482.0, fail: 0}
+  - {t: 486.0, hazard: 0}
+  - {t: 490.0, reverse: 0}
+  - {t: 492.0, turn: "off"}
+  - {t: 496.0, wiper: 0, wiperspeed: "off"}
+  - {t: 498.0, lowbeam: 0}
+
+  # 500-535 s: G1c + G2 + R1 + R2 + M3 + M4
+  - {t: 502.0, speed: 85.0}
+  - {t: 504.0, lowbeam: 1}
+  - {t: 506.0, wiper: 1, wiperspeed: "low"}
+  - {t: 508.0, turn: "right", reverse: 1}
+  - {t: 510.0, hazard: 1}
+  - {t: 512.0, drop: "0x146"}
+  - {t: 520.0, hazard: 0}
+  - {t: 523.0, reverse: 0}
+  - {t: 525.0, turn: "off"}
+  - {t: 527.0, resume: "0x146"}
+  - {t: 528.0, speed: 85.0}
+  - {t: 530.0, wiper: 0, wiperspeed: "off"}
+  - {t: 532.0, lowbeam: 0}
+
+  # 535-565 s: G1d + G2 + R1 + R2 + M3 + M4
+  - {t: 536.0, speed: 8.0}
+  - {t: 538.0, lowbeam: 1}
+  - {t: 540.0, wiper: 1, wiperspeed: "high"}
+  - {t: 542.0, speed: 0.0, autostop: 1}
+  - {t: 544.0, hazard: 1}
+  - {t: 546.0, reverse: 1}
+  - {t: 548.0, turn: "left"}
+  - {t: 554.0, hazard: 0}
+  - {t: 556.0, reverse: 0}
+  - {t: 558.0, turn: "off"}
+  - {t: 560.0, autostop: 0}
+  - {t: 562.0, wiper: 0, wiperspeed: "off", lowbeam: 0}
+  - {t: 564.0, speed: 10.0}
+
+  # 565-595 s: stress de persistencia D
+  # D-A: pulsos globales mediante hazard
+  - {t: 566.0, hazard: 1}
+  - {t: 569.0, hazard: 0}
+  - {t: 572.0, hazard: 1}
+  - {t: 575.0, hazard: 0}
+  - {t: 578.0, hazard: 1}
+  - {t: 581.0, hazard: 0}
+  # D-B: pulsos reaching-only mediante reversa
+  - {t: 584.0, reverse: 1}
+  - {t: 586.0, reverse: 0}
+  - {t: 589.0, reverse: 1}
+  - {t: 591.0, reverse: 0}
+
+  # 595-600 s: recuperacion final / baseline limpio
+  - {t: 595.0, resume: "all"}
+  - {t: 595.0, fail: 0, hazard: 0, autostop: 0}
+  - {t: 595.0, reverse: 0, turn: "off"}
+  - {t: 595.0, wiper: 0, wiperspeed: "off", lowbeam: 0}
+  - {t: 596.0, speed: 60.0}
+  - {t: 600.0, speed: 60.0}
