@@ -514,86 +514,133 @@ class ScenarioRunner:
 # --------------------------------------------------------------------------
 
 FONT = cv.FONT_HERSHEY_SIMPLEX
-COL_OK = (120, 220, 120)      # BGR: gate open
+COL_OK = (120, 220, 120)         # BGR: gate open
 COL_SUPPRESSED = (60, 190, 240)  # amber: suppressed by a CAN rule
-COL_ALERT = (60, 60, 235)     # red: alerting
+COL_ALERT = (60, 60, 235)        # red: alerting
 COL_TEXT = (240, 240, 240)
-COL_DIM = (170, 170, 170)
+COL_DIM = (160, 160, 160)
+COL_PANEL_BG = (26, 26, 26)
+COL_BAR_BG = (62, 62, 62)
+
+ALERT_BORDER_PX = 6  # peripheral cue: a thin frame, not a band over the image
+
+
+def _text_w(text: str, scale: float, thick: int = 1) -> int:
+    return cv.getTextSize(text, FONT, scale, thick)[0][0]
+
+
+def _fit_scale(text: str, max_w: int, start: float = 0.5,
+               thick: int = 1, floor: float = 0.30) -> float:
+    """Largest scale at which `text` fits in `max_w`.
+
+    Every panel line goes through this, so a long list of rule names shrinks
+    instead of running off the edge. The previous version drew at a fixed
+    scale and simply lost whatever did not fit, which is how the iteration
+    counter ended up truncated.
+    """
+    scale = start
+    while scale > floor and _text_w(text, scale, thick) > max_w:
+        scale -= 0.02
+    return max(scale, floor)
+
+
+def _put(img, text: str, x: int, y: int, scale: float = 0.5,
+         colour=COL_TEXT, thick: int = 1) -> None:
+    cv.putText(img, text, (x, y), FONT, scale, colour, thick, cv.LINE_AA)
 
 
 def draw_overlay(frame, row, gate, feeds, args, alert_class, drift_s):
-    """Diagnostic panel drawn on top of the feed.
+    """Video on top, telemetry in a panel underneath.
 
-    The point of this view is to tell at a glance whether the CAN side is
-    alive and whether it agrees with the video: the raw signals, the rule
-    that fired, and the drift between the video clock and wall clock are all
-    shown together with the model's probability.
+    Nothing is drawn over the image except a thin border while alerting: the
+    point of the view is to judge camera framing and driver posture, which a
+    panel sitting on top of the frame defeats.
     """
-    img = frame.copy()
-    h, w = img.shape[:2]
+    video = frame
+    if args.video_scale != 1.0:
+        video = cv.resize(video, None, fx=args.video_scale, fy=args.video_scale,
+                          interpolation=cv.INTER_LINEAR)
+    else:
+        video = video.copy()
+    vh, vw = video.shape[:2]
 
-    panel_h = 132
-    panel = img[0:panel_h, 0:w].copy()
-    cv.rectangle(panel, (0, 0), (w, panel_h), (25, 25, 25), -1)
-    cv.addWeighted(panel, 0.72, img[0:panel_h, 0:w], 0.28, 0, img[0:panel_h, 0:w])
+    if alert_class:
+        cv.rectangle(video, (0, 0), (vw - 1, vh - 1), COL_ALERT, ALERT_BORDER_PX)
 
-    # --- model line, one per active feed ---
-    y = 22
+    pad = 12
+    line_h = 22
+    feed_block = 40                      # model line + progress bar
+    n_rows = 3 + (1 if alert_class else 0)   # CAN, rules, timing (+ alert)
+    panel_h = pad + len(feeds) * feed_block + n_rows * line_h + pad
+    panel = np.full((panel_h, vw, 3), COL_PANEL_BG, np.uint8)
+
+    inner_w = vw - 2 * pad
+    y = pad + 14
+
+    # --- one block per feed: name, probability, moving average, gate state ---
     for name, feed in feeds.items():
         model = feed.model_name
         p = row.get(f"{name}_p_{model}", 0.0) or 0.0
         ma = row.get(f"ma_{model}", 0.0) or 0.0
+        thr = row.get("threshold_eff", 0.0) or 0.0
         open_gate = bool(gate[model])
         colour = COL_OK if open_gate else COL_SUPPRESSED
+        state = "GATE OPEN" if open_gate else "SUPPRESSED"
 
-        cv.putText(img, f"{model}", (10, y), FONT, 0.55, COL_TEXT, 1, cv.LINE_AA)
-        cv.putText(img, f"p={p:.3f}  ma={ma:.3f}/{row.get('threshold_eff', 0):.2f}",
-                   (95, y), FONT, 0.52, COL_TEXT, 1, cv.LINE_AA)
-        cv.putText(img, "GATE OPEN" if open_gate else "SUPPRESSED",
-                   (w - 150, y), FONT, 0.52, colour, 2, cv.LINE_AA)
+        # The gate label is right-aligned from its measured width, so it can
+        # never collide with the text to its left regardless of video width.
+        state_w = _text_w(state, 0.52, 2)
+        left = f"{model}   p={p:.3f}   ma={ma:.3f} / {thr:.2f}"
+        left_scale = _fit_scale(left, inner_w - state_w - 16, start=0.52)
 
-        # moving-average bar against the effective threshold
-        bx, by, bw, bh = 10, y + 8, w - 20, 8
-        cv.rectangle(img, (bx, by), (bx + bw, by + bh), (70, 70, 70), -1)
-        cv.rectangle(img, (bx, by), (bx + int(bw * min(ma, 1.0)), by + bh), colour, -1)
-        thr_x = bx + int(bw * min(row.get("threshold_eff", 1.0), 1.0))
-        cv.line(img, (thr_x, by - 2), (thr_x, by + bh + 2), (255, 255, 255), 1)
-        y += 34
+        _put(panel, left, pad, y, left_scale)
+        _put(panel, state, vw - pad - state_w, y, 0.52, colour, 2)
+        y += 12
+
+        bx, bw, bh = pad, inner_w, 8
+        cv.rectangle(panel, (bx, y), (bx + bw, y + bh), COL_BAR_BG, -1)
+        cv.rectangle(panel, (bx, y), (bx + int(bw * min(ma, 1.0)), y + bh),
+                     colour, -1)
+        thr_x = bx + int(bw * min(thr, 1.0))
+        cv.line(panel, (thr_x, y - 2), (thr_x, y + bh + 2), (255, 255, 255), 1)
+        y += feed_block - 12
 
     # --- CAN signals ---
     speed = gate["speed"]
-    speed_txt = "n/a" if speed != speed else f"{speed:5.1f} km/h"  # NaN check
+    speed_txt = "n/a" if speed != speed else f"{speed:.1f} km/h"  # NaN check
     can_line = (
-        f"CAN  V={speed_txt}  rev={gate['reverse']}  turn={gate['turn']}  "
-        f"haz={gate['hazard']}  stop={gate['traffic_stop']}  "
-        f"rain={gate['raining']}  beam={gate['low_beam']}"
+        f"CAN   V={speed_txt}   rev={gate['reverse']}   turn={gate['turn']}   "
+        f"haz={gate['hazard']}   stop={gate['traffic_stop']}   "
+        f"rain={gate['raining']}({gate['wiper_speed']})   beam={gate['low_beam']}"
     )
-    cv.putText(img, can_line, (10, y), FONT, 0.48, COL_TEXT, 1, cv.LINE_AA)
-    y += 20
+    _put(panel, can_line, pad, y, _fit_scale(can_line, inner_w, start=0.48))
+    y += line_h
 
-    reasons = " ".join(gate["reasons"]) or "-"
-    cv.putText(img, f"rules: {reasons}", (10, y), FONT, 0.48, COL_DIM, 1, cv.LINE_AA)
-    y += 20
+    # --- rules that fired this iteration ---
+    reasons = " ".join(gate["reasons"]) if gate["reasons"] else "none active"
+    rules_line = f"rules: {reasons}"
+    _put(panel, rules_line, pad, y, _fit_scale(rules_line, inner_w, start=0.48),
+         COL_DIM)
+    y += line_h
 
-    # Drift is the diagnostic that matters when injecting a scenario: if the
-    # video clock falls behind wall clock, the CAN timeline no longer lines up
-    # with what is on screen.
+    # --- clocks. Drift is the tell for CAN/video misalignment. ---
+    timing = (
+        f"video t={row['t_video_s']:.2f}s   wall t={row['t_wall_s']:.2f}s   "
+        f"drift={drift_s:+.2f}s   iter {row['iteration']}"
+    )
     drift_col = COL_TEXT if abs(drift_s) < 0.5 else COL_SUPPRESSED
-    cv.putText(
-        img,
-        f"video t={row['t_video_s']:6.2f}s   wall t={row['t_wall_s']:6.2f}s   "
-        f"drift={drift_s:+.2f}s   iter {row['iteration']}",
-        (10, y), FONT, 0.45, drift_col, 1, cv.LINE_AA,
-    )
+    _put(panel, timing, pad, y, _fit_scale(timing, inner_w, start=0.46), drift_col)
+    y += line_h
 
     if alert_class:
-        cv.rectangle(img, (0, h - 46), (w, h), COL_ALERT, -1)
-        cv.putText(img, f"ALERT: {alert_class.upper()}", (14, h - 15),
-                   FONT, 0.9, (255, 255, 255), 2, cv.LINE_AA)
+        _put(panel, f"ALERT: {alert_class.upper()}", pad, y + 2, 0.72,
+             COL_ALERT, 2)
 
+    canvas = np.vstack([video, panel])
     if args.display_scale != 1.0:
-        img = cv.resize(img, None, fx=args.display_scale, fy=args.display_scale)
-    return img
+        canvas = cv.resize(canvas, None, fx=args.display_scale,
+                           fy=args.display_scale)
+    return canvas
 
 
 # --------------------------------------------------------------------------
@@ -705,10 +752,17 @@ def parse_args():
              "display (or X forwarding over SSH: ssh -X).",
     )
     p.add_argument(
+        "--video-scale",
+        type=float,
+        default=2.0,
+        help="Magnifies the video before the panel is appended. DMD clips are "
+             "426x240, so the default 2.0 makes framing judgeable.",
+    )
+    p.add_argument(
         "--display-scale",
         type=float,
         default=1.0,
-        help="Scales the display window, e.g. 0.5 on a small screen.",
+        help="Scales the whole composed view (video + panel) at the very end.",
     )
     p.add_argument(
         "--display-video",

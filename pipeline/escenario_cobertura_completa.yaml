@@ -1,0 +1,197 @@
+# =====================================================================
+# Escenario 4: cobertura completa (dia/noche, lluvia, todas las reglas)
+#
+#   python3 pipeline.py \
+#       --body-video body.mp4 \
+#       --body-config configs/config_binary_phone_balanced.yaml \
+#       --body-checkpoint checkpoints/phone.pth \
+#       --can-channel vcan0 \
+#       --inject-scenario escenario_cobertura_completa.yaml \
+#       --inject-loop \
+#       --csv cobertura.csv --verbose
+#
+# Duracion: 590 s (~9,8 min). Con --inject-loop se repite hasta que
+# termine el video.
+#
+# PROPOSITO. Es el escenario "maestro": un solo recorrido que ejercita cada
+# regla activa en el sistema (solo phone; reaching esta descartado) y las
+# combinaciones relevantes entre ellas, en vez de un escenario por regla.
+#
+# COBERTURA
+#
+#   Regla              Fase(s) donde se ejercita           Combinada con
+#   -----------------  -----------------------------------  --------------
+#   G1a  (parado)       t=56, t=258, t=484                   solo / +M4 /+M4+G2
+#   G1b  (fail)         t=190, t=318                          +M3 / +M4
+#   G1c  (stale 0x146)  t=174, t=302                          +M3 / +M4
+#   G1d  (parada trafico) t=46, t=248, t=459                  solo / +M4 / +M4+G2
+#   G2   (hazard)       t=77, t=277, t=469                    solo / +M4 / +M4+G1d
+#   M3   (lluvia)       t=132-160, t=168-182, t=358-434       sola / +G1c,G1b / +M4
+#   M4   (noche)        t=214 en adelante                     sola / +M3 / +G1a-d,G2
+#   ctx stale (0x520/0x560, diagnostico) t=335-349             ninguna (informativo)
+#
+#   R1 (reversa) y R2 (intermitente) se incluyen como CONTROL NEGATIVO
+#   (t=100-111 y t=115-121): confirman que, con el modelo de reaching
+#   descartado, ninguna de las dos altera la decision de phone. Es la
+#   asimetria de la tabla de reglas verificada en tiempo de ejecucion, no
+#   solo declarada en la documentacion.
+#
+#   EPBSts y DriverDoorSts NO se incluyen: existen como comandos del
+#   inyector (`epb`, `door`) pero ContextGate no los lee en absoluto en la
+#   version actual de can_context.py. Inyectarlos no tendria ningun efecto
+#   observable, asi que se omiten para no sugerir una cobertura que no
+#   existe.
+#
+# DOS BLOQUES PAREADOS PARA ANALISIS (mismo criterio que
+# escenario_dia_a_noche.yaml: misma velocidad, ninguna regla de supresion
+# activa, para poder comparar la distribucion de body_p_phone):
+#
+#   REF-A   t=  8-40 s   55 km/h, dia, seco     (32 s)
+#   REF-B   t=374-424 s  95 km/h a 70 km/h, noche, lluvia intensa (50 s;
+#                        la velocidad varia dentro del tramo, a diferencia
+#                        de REF-A, asi que la comparacion debe hacerse por
+#                        velocidad si se quiere aislar el efecto de M3+M4)
+#
+# Con M3_RAIN_FACTOR y M4_NIGHT_FACTOR en 1.0 ninguna de las dos altera la
+# decision todavia: el escenario sirve para poblar can_raining,
+# can_wiper_speed, can_low_beam y can_sensitivity en el CSV, no para
+# verificar un umbral ya calibrado.
+#
+# Todas las senales se fijan en t=0 para que --inject-loop parta siempre
+# del mismo estado.
+# =====================================================================
+
+name: cobertura_completa
+descripcion: Recorrido de dia a noche con lluvia, tunel, crepusculo, paradas con y sin start-stop, emergencia, perdida de senal, fallo declarado y los dos controles negativos de reversa e intermitente.
+
+steps:
+  # --- reinicio limpio del estado ---
+  - {t: 0.0,   resume: "all"}
+  - {t: 0.0,   speed: 0.0, autostop: 0, hazard: 0, fail: 0}
+  - {t: 0.0,   wiper: 0, wiperspeed: "off", lowbeam: 0}
+  - {t: 0.0,   turn: "off", reverse: 0}
+
+  # ===== REF-A: dia, seco, 55 km/h, 8-40s. Incluye un tunel diurno =====
+  - {t: 5.0,   speed: 20.0}
+  - {t: 8.0,   speed: 55.0}
+  - {t: 20.0,  lowbeam: 1}            # tunel en pleno dia: proxy debil de M4
+  - {t: 26.0,  lowbeam: 0}
+  - {t: 40.0,  speed: 55.0}
+
+  # --- G1d: parada de trafico con start-stop ---
+  - {t: 44.0,  speed: 12.0}
+  - {t: 46.0,  speed: 0.0, autostop: 1}
+  # --- G1a: el mismo parado, sin start-stop (contraste directo) ---
+  - {t: 56.0,  autostop: 0}
+  - {t: 60.0,  speed: 15.0}
+  - {t: 64.0,  speed: 50.0}
+
+  # --- G2: luces de emergencia con el vehiculo detenido ---
+  - {t: 74.0,  speed: 20.0}
+  - {t: 77.0,  speed: 2.0, hazard: 1}
+  - {t: 87.0,  hazard: 0}
+  - {t: 90.0,  speed: 15.0}
+  - {t: 94.0,  speed: 45.0}
+
+  # --- control negativo R2: intermitente no debe afectar a phone ---
+  - {t: 100.0, turn: "left"}
+  - {t: 104.0, turn: "off"}
+  - {t: 108.0, turn: "right"}
+  - {t: 111.0, turn: "off"}
+
+  # --- control negativo R1: reversa no debe afectar a phone ---
+  # (velocidad por encima de V_ON=5 para no confundir con G1a)
+  - {t: 115.0, speed: 8.0}
+  - {t: 117.0, reverse: 1}
+  - {t: 119.0, reverse: 0}
+  - {t: 121.0, speed: 40.0}
+
+  # ===== Lluvia diurna: M3 en sus tres niveles =====
+  - {t: 128.0, speed: 45.0}
+  - {t: 132.0, wiper: 1, wiperspeed: "low"}
+  - {t: 142.0, wiperspeed: "high"}
+  - {t: 152.0, wiperspeed: "low"}
+  - {t: 160.0, wiper: 0, wiperspeed: "off"}
+  - {t: 164.0, speed: 50.0}
+
+  # --- G1c + M3: perdida de la trama de velocidad en plena lluvia ---
+  - {t: 168.0, wiper: 1, wiperspeed: "high"}
+  - {t: 174.0, drop: "0x146"}
+  - {t: 182.0, resume: "0x146"}
+  - {t: 185.0, speed: 48.0}
+
+  # --- G1b + M3: fallo declarado (distinto de la perdida de trama) ---
+  - {t: 190.0, fail: 1}
+  - {t: 198.0, fail: 0}
+  - {t: 201.0, speed: 50.0, wiperspeed: "low"}
+
+  # ===== Crepusculo: M4 sin histeresis, se asienta en "noche" =====
+  - {t: 206.0, lowbeam: 1}
+  - {t: 208.0, lowbeam: 0}
+  - {t: 210.0, lowbeam: 1}
+  - {t: 212.0, lowbeam: 0}
+  - {t: 214.0, lowbeam: 1}            # noche desde aqui en adelante
+
+  # --- lluvia arrecia ya de noche: M3+M4 simultaneas ---
+  - {t: 220.0, wiperspeed: "high"}
+  - {t: 228.0, speed: 40.0}
+
+  # --- escampa, queda solo M4 ---
+  - {t: 236.0, wiperspeed: "low"}
+  - {t: 242.0, wiper: 0, wiperspeed: "off"}
+  - {t: 246.0, speed: 10.0}
+
+  # --- G1d + M4, luego G1a + M4 (parada nocturna) ---
+  - {t: 248.0, speed: 0.0, autostop: 1}
+  - {t: 258.0, autostop: 0}
+  - {t: 263.0, speed: 15.0}
+  - {t: 267.0, speed: 45.0}
+
+  # --- G2 + M4: emergencia nocturna ---
+  - {t: 274.0, speed: 15.0}
+  - {t: 277.0, speed: 2.0, hazard: 1}
+  - {t: 287.0, hazard: 0}
+  - {t: 291.0, speed: 15.0}
+  - {t: 295.0, speed: 45.0}
+
+  # --- G1c + M4: perdida de trama de noche ---
+  - {t: 302.0, drop: "0x146"}
+  - {t: 310.0, resume: "0x146"}
+  - {t: 313.0, speed: 45.0}
+
+  # --- G1b + M4: fallo declarado de noche ---
+  - {t: 318.0, fail: 1}
+  - {t: 326.0, fail: 0}
+  - {t: 329.0, speed: 47.0}
+
+  # --- Diagnostico: tramas de CONTEXTO (0x520 y 0x560) obsoletas.
+  #     Con FAIL_SAFE_CONTEXT=False esto NO debe suprimir nada; sirve para
+  #     comprobar que el aviso ctx:*_stale aparece en el CSV sin alterar
+  #     la decision. ---
+  - {t: 335.0, drop: "0x520"}
+  - {t: 336.0, drop: "0x560"}
+  - {t: 348.0, resume: "0x520"}
+  - {t: 349.0, resume: "0x560"}
+  - {t: 352.0, speed: 45.0}
+
+  # ===== REF-B: noche + lluvia intensa + autovia, 374-424s =====
+  - {t: 358.0, wiper: 1, wiperspeed: "low"}
+  - {t: 366.0, wiperspeed: "high"}
+  - {t: 374.0, speed: 95.0}
+  - {t: 424.0, speed: 70.0}
+
+  # --- escampa definitivamente, sigue de noche ---
+  - {t: 434.0, wiperspeed: "low"}
+  - {t: 440.0, wiper: 0, wiperspeed: "off"}
+
+  # ===== Cierre: G1d + G2 + M4 a la vez ("todo junto"), luego calma =====
+  - {t: 446.0, speed: 50.0}
+  - {t: 452.0, speed: 20.0}
+  - {t: 456.0, speed: 8.0}
+  - {t: 459.0, speed: 0.0, autostop: 1}
+  - {t: 469.0, hazard: 1}
+  - {t: 484.0, autostop: 0}
+  - {t: 499.0, hazard: 0}
+  - {t: 503.0, speed: 12.0}
+  - {t: 507.0, speed: 45.0}
+  - {t: 585.0, speed: 45.0}
