@@ -361,6 +361,7 @@ class Feed:
 
         self.last_probs: np.ndarray | None = None
         self.last_label: str | None = None
+        self.last_frame = None
 
     def _ensure_indices(self) -> None:
         if self.idx_distraction is not None:
@@ -509,6 +510,93 @@ class ScenarioRunner:
 
 
 # --------------------------------------------------------------------------
+# Diagnostic overlay
+# --------------------------------------------------------------------------
+
+FONT = cv.FONT_HERSHEY_SIMPLEX
+COL_OK = (120, 220, 120)      # BGR: gate open
+COL_SUPPRESSED = (60, 190, 240)  # amber: suppressed by a CAN rule
+COL_ALERT = (60, 60, 235)     # red: alerting
+COL_TEXT = (240, 240, 240)
+COL_DIM = (170, 170, 170)
+
+
+def draw_overlay(frame, row, gate, feeds, args, alert_class, drift_s):
+    """Diagnostic panel drawn on top of the feed.
+
+    The point of this view is to tell at a glance whether the CAN side is
+    alive and whether it agrees with the video: the raw signals, the rule
+    that fired, and the drift between the video clock and wall clock are all
+    shown together with the model's probability.
+    """
+    img = frame.copy()
+    h, w = img.shape[:2]
+
+    panel_h = 132
+    panel = img[0:panel_h, 0:w].copy()
+    cv.rectangle(panel, (0, 0), (w, panel_h), (25, 25, 25), -1)
+    cv.addWeighted(panel, 0.72, img[0:panel_h, 0:w], 0.28, 0, img[0:panel_h, 0:w])
+
+    # --- model line, one per active feed ---
+    y = 22
+    for name, feed in feeds.items():
+        model = feed.model_name
+        p = row.get(f"{name}_p_{model}", 0.0) or 0.0
+        ma = row.get(f"ma_{model}", 0.0) or 0.0
+        open_gate = bool(gate[model])
+        colour = COL_OK if open_gate else COL_SUPPRESSED
+
+        cv.putText(img, f"{model}", (10, y), FONT, 0.55, COL_TEXT, 1, cv.LINE_AA)
+        cv.putText(img, f"p={p:.3f}  ma={ma:.3f}/{row.get('threshold_eff', 0):.2f}",
+                   (95, y), FONT, 0.52, COL_TEXT, 1, cv.LINE_AA)
+        cv.putText(img, "GATE OPEN" if open_gate else "SUPPRESSED",
+                   (w - 150, y), FONT, 0.52, colour, 2, cv.LINE_AA)
+
+        # moving-average bar against the effective threshold
+        bx, by, bw, bh = 10, y + 8, w - 20, 8
+        cv.rectangle(img, (bx, by), (bx + bw, by + bh), (70, 70, 70), -1)
+        cv.rectangle(img, (bx, by), (bx + int(bw * min(ma, 1.0)), by + bh), colour, -1)
+        thr_x = bx + int(bw * min(row.get("threshold_eff", 1.0), 1.0))
+        cv.line(img, (thr_x, by - 2), (thr_x, by + bh + 2), (255, 255, 255), 1)
+        y += 34
+
+    # --- CAN signals ---
+    speed = gate["speed"]
+    speed_txt = "n/a" if speed != speed else f"{speed:5.1f} km/h"  # NaN check
+    can_line = (
+        f"CAN  V={speed_txt}  rev={gate['reverse']}  turn={gate['turn']}  "
+        f"haz={gate['hazard']}  stop={gate['traffic_stop']}  "
+        f"rain={gate['raining']}  beam={gate['low_beam']}"
+    )
+    cv.putText(img, can_line, (10, y), FONT, 0.48, COL_TEXT, 1, cv.LINE_AA)
+    y += 20
+
+    reasons = " ".join(gate["reasons"]) or "-"
+    cv.putText(img, f"rules: {reasons}", (10, y), FONT, 0.48, COL_DIM, 1, cv.LINE_AA)
+    y += 20
+
+    # Drift is the diagnostic that matters when injecting a scenario: if the
+    # video clock falls behind wall clock, the CAN timeline no longer lines up
+    # with what is on screen.
+    drift_col = COL_TEXT if abs(drift_s) < 0.5 else COL_SUPPRESSED
+    cv.putText(
+        img,
+        f"video t={row['t_video_s']:6.2f}s   wall t={row['t_wall_s']:6.2f}s   "
+        f"drift={drift_s:+.2f}s   iter {row['iteration']}",
+        (10, y), FONT, 0.45, drift_col, 1, cv.LINE_AA,
+    )
+
+    if alert_class:
+        cv.rectangle(img, (0, h - 46), (w, h), COL_ALERT, -1)
+        cv.putText(img, f"ALERT: {alert_class.upper()}", (14, h - 15),
+                   FONT, 0.9, (255, 255, 255), 2, cv.LINE_AA)
+
+    if args.display_scale != 1.0:
+        img = cv.resize(img, None, fx=args.display_scale, fy=args.display_scale)
+    return img
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -609,6 +697,25 @@ def parse_args():
 
     p.add_argument("--csv", default=None, help="Per-iteration trace.")
     p.add_argument("--verbose", action="store_true", help="Prints every iteration.")
+    p.add_argument(
+        "--display",
+        action="store_true",
+        help="Opens a window with the feed, the model probability, the CAN "
+             "signals and the rule that fired. Press 'q' to quit. Needs a "
+             "display (or X forwarding over SSH: ssh -X).",
+    )
+    p.add_argument(
+        "--display-scale",
+        type=float,
+        default=1.0,
+        help="Scales the display window, e.g. 0.5 on a small screen.",
+    )
+    p.add_argument(
+        "--display-video",
+        default=None,
+        metavar="PATH",
+        help="Also writes the annotated view to a video file.",
+    )
     p.add_argument(
         "--realtime",
         dest="realtime",
@@ -737,6 +844,7 @@ def main() -> None:
 
     writer = None
     csv_file = None
+    writer_video = None
     if args.csv:
         csv_file = open(args.csv, "w", newline="", encoding="utf-8")
         writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
@@ -777,6 +885,8 @@ def main() -> None:
             for name, feed in feeds.items():
                 for frame in pending[name]:
                     feed.push(frame)
+                if pending[name]:
+                    feed.last_frame = pending[name][-1]
             frame_idx += len(pending[reference_feed])
 
             if args.realtime and not live:
@@ -804,26 +914,32 @@ def main() -> None:
             # frames arrive one at a time, as they do from a file.
             if frame_idx < next_inference_frame:
                 continue
-            next_inference_frame += args.inference_every
+            # Snap forward rather than accumulate: the buffer only becomes
+            # ready at frame `buffer_size`, so a `+=` here would fire once for
+            # every scheduled slot that elapsed while the buffer was filling
+            # (8, 16, 24, ... up to buffer_size) in one burst.
+            next_inference_frame = frame_idx + args.inference_every
 
-            if live:
-                # Skip WHOLE iterations when running behind, never individual
-                # frames: the buffer stays evenly spaced either way, we simply
-                # make fewer decisions from it.
-                if time.perf_counter() > next_deadline:
-                    skipped_iterations += 1
-                    next_deadline = time.perf_counter() + iteration_period
-                    if not lag_warned:
-                        lag_warned = True
-                        print(
-                            f"WARNING: inference is slower than the "
-                            f"{iteration_period * 1000:.0f} ms iteration period; "
-                            "skipping whole iterations to keep up. Lower "
-                            "--segment-windows or raise --inference-every.",
-                            file=sys.stderr,
-                        )
-                    continue
-                next_deadline += iteration_period
+            # Skip WHOLE iterations when running behind, never individual
+            # frames: the buffer stays evenly spaced either way, we simply
+            # make fewer decisions from it. This applies to files as well as
+            # cameras: when inference is slower than real time the CAN
+            # scenario runs ahead of the video, and without skipping the two
+            # clocks drift apart permanently.
+            if time.perf_counter() > next_deadline:
+                skipped_iterations += 1
+                next_deadline = time.perf_counter() + iteration_period
+                if not lag_warned:
+                    lag_warned = True
+                    print(
+                        f"WARNING: inference is slower than the "
+                        f"{iteration_period * 1000:.0f} ms iteration period; "
+                        "skipping whole iterations to stay aligned with CAN. "
+                        "Lower --segment-windows or raise --inference-every.",
+                        file=sys.stderr,
+                    )
+                continue
+            next_deadline += iteration_period
 
             # Closes the CAN accumulation interval right here, so that the
             # OR over the interval coincides with one iteration.
@@ -895,6 +1011,29 @@ def main() -> None:
                     print(f"   alert ended    t={row['t_video_s']:7.2f}s")
                 prev_alert = alert_class
 
+            if args.display or writer_video is not None:
+                base = feeds[reference_feed].last_frame
+                if base is not None:
+                    drift = row["t_video_s"] - row["t_wall_s"]
+                    annotated = draw_overlay(
+                        base, row, gate, feeds, args, alert_class, drift
+                    )
+                    if writer_video is None and args.display_video:
+                        h, w = annotated.shape[:2]
+                        writer_video = cv.VideoWriter(
+                            args.display_video,
+                            cv.VideoWriter_fourcc(*"mp4v"),
+                            fps / args.inference_every,  # one frame per iteration
+                            (w, h),
+                        )
+                    if writer_video is not None:
+                        writer_video.write(annotated)
+                    if args.display:
+                        cv.imshow("pipeline", annotated)
+                        if cv.waitKey(1) & 0xFF == ord("q"):
+                            print("\nClosed by user.")
+                            break
+
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
@@ -905,6 +1044,8 @@ def main() -> None:
         context.shutdown()
         if csv_file:
             csv_file.close()
+        if writer_video is not None:
+            writer_video.release()
         cv.destroyAllWindows()
 
     print()
