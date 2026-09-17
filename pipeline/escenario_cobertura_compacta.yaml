@@ -1,0 +1,94 @@
+# =====================================================================
+# Escenario compacto de cobertura completa para evaluacion CAN
+# Duracion: 55 s
+# Diseñado para ejecutarse incluso sobre el video BODY mas corto (~60.9 s).
+#
+# Configuracion recomendada:
+#   --segment-windows 2
+#   --window-stride 8
+#   --inference-every 8
+#   --n-persist 3
+#   --threshold 0.5
+#
+# Cobertura:
+#   0.0-3.0 s    baseline neutro
+#   3.0-6.0 s    R2 + post-period (control negativo para phone)
+#   6.5-9.0 s    R1 + grace-period (control negativo para phone)
+#   11-16 s      M3/M4, actualmente neutras
+#   18-21 s      G1c: stale de 0x146
+#   23-26 s      G1b: fallo declarado de velocidad
+#   28-31 s      G1d: parada de trafico con start-stop
+#   31-34 s      G1a: detenido sin start-stop
+#   35-38 s      G2: hazard aislado
+#   40-43.5 s    stale de 0x520/0x560, diagnostico
+#   45-48 s      G1d + G2
+#   48-50 s      G1a
+#   50-55 s      recuperacion neutral
+# =====================================================================
+
+name: cobertura_compacta
+descripcion: Escenario compacto de 55 s para verificar reglas y covariables del sistema final de Phone Use.
+
+steps:
+  - {t: 0.0,  resume: "all"}
+  - {t: 0.0,  speed: 40.0, autostop: 0, hazard: 0, fail: 0}
+  - {t: 0.0,  wiper: 0, wiperspeed: "off", lowbeam: 0}
+  - {t: 0.0,  turn: "off", reverse: 0}
+
+  # R2: control negativo para phone
+  - {t: 3.0,  turn: "left"}
+  - {t: 4.0,  turn: "off"}
+
+  # R1: control negativo para phone
+  - {t: 6.5,  speed: 8.0}
+  - {t: 6.8,  reverse: 1}
+  - {t: 7.3,  reverse: 0}
+  - {t: 9.0,  speed: 40.0}
+
+  # M3/M4: covariables neutras
+  - {t: 11.0, wiper: 1, wiperspeed: "low"}
+  - {t: 12.5, lowbeam: 1}
+  - {t: 14.0, wiperspeed: "high"}
+  - {t: 15.0, wiper: 0, wiperspeed: "off"}
+  - {t: 16.0, lowbeam: 0}
+
+  # G1c: stale de velocidad
+  - {t: 18.0, drop: "0x146"}
+  - {t: 21.0, resume: "0x146"}
+  - {t: 21.2, speed: 40.0}
+
+  # G1b: fallo declarado
+  - {t: 23.0, fail: 1}
+  - {t: 26.0, fail: 0}
+  - {t: 26.2, speed: 40.0}
+
+  # G1d: traffic stop
+  - {t: 27.5, speed: 10.0}
+  - {t: 28.0, speed: 0.0, autostop: 1}
+
+  # G1a: detenido sin start-stop
+  - {t: 31.0, autostop: 0}
+  - {t: 34.0, speed: 40.0}
+
+  # G2: hazard aislado
+  - {t: 35.0, hazard: 1}
+  - {t: 38.0, hazard: 0}
+
+  # Stale de contexto; FAIL_SAFE_CONTEXT=False
+  - {t: 40.0, drop: "0x520"}
+  - {t: 40.0, drop: "0x560"}
+  - {t: 43.5, resume: "0x520"}
+  - {t: 43.5, resume: "0x560"}
+  - {t: 44.0, speed: 40.0, turn: "off", reverse: 0}
+
+  # Combinacion G1d + G2
+  - {t: 45.0, speed: 0.0, autostop: 1, hazard: 1}
+  - {t: 48.0, hazard: 0, autostop: 0}
+
+  # G1a hasta reanudar marcha
+  - {t: 50.0, speed: 40.0}
+
+  # Cierre neutro y fin del escenario
+  - {t: 55.0, speed: 40.0, autostop: 0, hazard: 0, fail: 0,
+              wiper: 0, wiperspeed: "off", lowbeam: 0,
+              turn: "off", reverse: 0}
