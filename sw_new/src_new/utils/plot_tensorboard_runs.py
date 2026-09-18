@@ -76,8 +76,12 @@ For a single run, when the corresponding tags exist:
   - learning_rate.{png,pdf}
 
 For multiple runs:
-  - comparison_val_segment_macro_f1.{png,pdf}
-  - summary_val_segment_macro_f1.{png,pdf}
+  - comparison_validation_metric.{png,pdf}
+  - summary_validation_metric.{png,pdf}
+
+For old runs without segment-level metrics, --metric auto falls back to the
+best validation metric common to every supplied run. It never mixes window-
+and segment-level metrics inside the same comparison.
 
 When --x-values is supplied:
   - summary_vs_x.{png,pdf}
@@ -178,6 +182,18 @@ def parse_args() -> argparse.Namespace:
         choices=["max", "plateau_mean", "last"],
         default="max",
         help="Statistic used in the run-summary figure (default: max).",
+    )
+    p.add_argument(
+        "--metric",
+        choices=["auto", "segment_macro_f1", "window_macro_f1",
+                 "segment_accuracy", "window_accuracy"],
+        default="auto",
+        help=(
+            "Validation metric used for multi-run comparisons. "
+            "'auto' selects the best metric common to every run, preferring "
+            "segment macro-F1, then window macro-F1, then segment accuracy, "
+            "then window accuracy."
+        ),
     )
     p.add_argument(
         "--x-values",
@@ -304,6 +320,67 @@ def mean(values: Iterable[float]) -> float:
     return sum(vals) / len(vals) if vals else math.nan
 
 
+METRIC_TAGS = {
+    "segment_macro_f1": "val/macro_f1_segment",
+    "window_macro_f1": "val/macro_f1",
+    "segment_accuracy": "val/accuracy_segment",
+    "window_accuracy": "val/accuracy",
+}
+
+METRIC_LABELS = {
+    "segment_macro_f1": "Validation segment macro-F1",
+    "window_macro_f1": "Validation window macro-F1",
+    "segment_accuracy": "Validation segment accuracy",
+    "window_accuracy": "Validation window accuracy",
+}
+
+
+def choose_common_metric(
+    runs: List[Tuple[str, Dict[str, List[float]]]],
+    requested: str,
+) -> Tuple[str, str]:
+    """Choose one validation metric that exists in every run.
+
+    Old runs may predate segment-level TensorBoard logging. In auto mode we
+    therefore fall back to the strongest metric common to all supplied runs.
+    This avoids silently mixing segment-level and window-level quantities in
+    the same comparison.
+    """
+    if requested != "auto":
+        tag = METRIC_TAGS[requested]
+        missing = [label for label, data in runs if not data.get(tag)]
+        if missing:
+            raise SystemExit(
+                f"Requested metric {requested!r} ({tag}) is missing from: "
+                + ", ".join(missing)
+            )
+        return tag, METRIC_LABELS[requested]
+
+    priority = [
+        "segment_macro_f1",
+        "window_macro_f1",
+        "segment_accuracy",
+        "window_accuracy",
+    ]
+    for key in priority:
+        tag = METRIC_TAGS[key]
+        if all(data.get(tag) for _, data in runs):
+            return tag, METRIC_LABELS[key]
+
+    available = {
+        label: [tag for tag in METRIC_TAGS.values() if data.get(tag)]
+        for label, data in runs
+    }
+    details = "; ".join(
+        f"{label}: {', '.join(tags) if tags else 'none'}"
+        for label, tags in available.items()
+    )
+    raise SystemExit(
+        "No common validation metric was found across all runs. "
+        f"Available metrics -> {details}"
+    )
+
+
 def summary_stat(values: List[float], stat: str, plateau: Tuple[int, int]) -> float:
     vals = finite(values)
     if not vals:
@@ -323,12 +400,19 @@ def summary_stat(values: List[float], stat: str, plateau: Tuple[int, int]) -> fl
     return mean(selected)
 
 
-def summary_stat_label(stat: str, plateau: Tuple[int, int]) -> str:
+def summary_stat_label(
+    stat: str,
+    plateau: Tuple[int, int],
+    metric_label: str,
+) -> str:
     if stat == "max":
-        return "Maximum validation segment macro-F1"
+        return f"Maximum {metric_label.lower()}"
     if stat == "last":
-        return "Final validation segment macro-F1"
-    return f"Mean validation segment macro-F1 (epochs {plateau[0]}–{plateau[1]})"
+        return f"Final {metric_label.lower()}"
+    return (
+        f"Mean {metric_label.lower()} "
+        f"(epochs {plateau[0]}–{plateau[1]})"
+    )
 
 
 def safe_slug(label: str) -> str:
@@ -444,14 +528,19 @@ def multi_run_figures(
     x_label: str,
     reference_line: float | None,
     reference_label: str,
+    metric: str,
 ) -> None:
-    # Overlay validation segment macro-F1 curves.
+    # Select a metric that is genuinely comparable across every run.
+    metric_tag, metric_label = choose_common_metric(runs, metric)
+    print(f"Comparison metric: {metric_label} ({metric_tag})")
+
     valid_runs = [
-        (label, data["val/macro_f1_segment"])
+        (label, data[metric_tag])
         for label, data in runs
-        if data.get("val/macro_f1_segment")
+        if data.get(metric_tag)
     ]
 
+    # Overlay epoch curves.
     if valid_runs:
         fig, ax = plt.subplots(figsize=(8.0, 4.8))
         for label, values in valid_runs:
@@ -463,24 +552,25 @@ def multi_run_figures(
             )
         add_reference(ax, reference_line, reference_label)
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Validation segment macro-F1")
-        ax.set_title(f"{title}\nValidation segment macro-F1 by run")
-        ax.set_ylim(bottom=0)
+        ax.set_ylabel(metric_label)
+        ax.set_title(f"{title}\n{metric_label} by run")
+        if "F1" in metric_label or "accuracy" in metric_label.lower():
+            ax.set_ylim(bottom=0)
         ax.grid(True, alpha=0.25)
         legend_if_needed(ax)
         save_figure(
             fig,
             outdir,
-            "comparison_val_segment_macro_f1",
+            "comparison_validation_metric",
             formats,
             dpi,
         )
 
-    # Summary statistic by run as a categorical bar chart.
+    # Summary statistic by run.
     labels = []
     values = []
     for label, data in runs:
-        vals = data.get("val/macro_f1_segment", [])
+        vals = data.get(metric_tag, [])
         if vals:
             labels.append(label)
             values.append(summary_stat(vals, stat, plateau))
@@ -492,20 +582,22 @@ def multi_run_figures(
         ax.set_xticks(positions)
         ax.set_xticklabels(labels, rotation=30, ha="right")
         add_reference(ax, reference_line, reference_label)
-        ax.set_ylabel(summary_stat_label(stat, plateau))
+        ax.set_ylabel(summary_stat_label(stat, plateau, metric_label))
         ax.set_title(f"{title}\nRun summary")
-        ax.set_ylim(bottom=0)
+        if "F1" in metric_label or "accuracy" in metric_label.lower():
+            ax.set_ylim(bottom=0)
         ax.grid(True, axis="y", alpha=0.25)
         legend_if_needed(ax)
         save_figure(
             fig,
             outdir,
-            "summary_val_segment_macro_f1",
+            "summary_validation_metric",
             formats,
             dpi,
         )
 
-    # Ordered numeric x-axis summary, useful for subject learning curve.
+    # Ordered numeric x-axis summary, useful for progressive unfreezing or
+    # subject-diversity experiments.
     if x_values is not None:
         if len(x_values) != len(runs):
             raise SystemExit(
@@ -515,7 +607,7 @@ def multi_run_figures(
 
         points = []
         for x, (label, data) in zip(x_values, runs):
-            vals = data.get("val/macro_f1_segment", [])
+            vals = data.get(metric_tag, [])
             if vals:
                 points.append((x, summary_stat(vals, stat, plateau), label))
 
@@ -528,13 +620,20 @@ def multi_run_figures(
             ax.plot(xs, ys, marker="o")
             add_reference(ax, reference_line, reference_label)
             ax.set_xlabel(x_label)
-            ax.set_ylabel(summary_stat_label(stat, plateau))
+            ax.set_ylabel(summary_stat_label(stat, plateau, metric_label))
             ax.set_title(title)
-            ax.set_ylim(bottom=0)
+            if "F1" in metric_label or "accuracy" in metric_label.lower():
+                ax.set_ylim(bottom=0)
             ax.grid(True, alpha=0.25)
             legend_if_needed(ax)
             save_figure(fig, outdir, "summary_vs_x", formats, dpi)
 
+    # Write the chosen metric to a small metadata file for reproducibility.
+    metadata = outdir / "comparison_metric.txt"
+    metadata.write_text(
+        f"metric_tag={metric_tag}\nmetric_label={metric_label}\n",
+        encoding="utf-8",
+    )
 
 def write_run_scalars_csv(
     outdir: Path,
@@ -679,6 +778,7 @@ def main() -> None:
             x_label=args.x_label,
             reference_line=args.reference_line,
             reference_label=args.reference_label,
+            metric=args.metric,
         )
 
     print(f"\nDone. Outputs written to: {outdir}")
